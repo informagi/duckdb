@@ -16,8 +16,7 @@ namespace duckdb {
 class BoundSQLStatement;
 
 class BoundCopyStatement;
-class BoundCreateIndexStatement;
-class BoundCreateTableStatement;
+class BoundCreateStatement;
 class BoundDeleteStatement;
 class BoundExecuteStatement;
 class BoundExplainStatement;
@@ -32,6 +31,7 @@ class BoundSimpleStatement;
 class BoundQueryNode;
 class BoundSelectNode;
 class BoundSetOperationNode;
+class BoundRecursiveCTENode;
 
 //===--------------------------------------------------------------------===//
 // Expressions
@@ -67,5 +67,6 @@ class BoundSubqueryRef;
 class BoundTableFunction;
 class BoundEmptyTableRef;
 class BoundExpressionListRef;
+class BoundCTERef;
 
 } // namespace duckdb

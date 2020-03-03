@@ -43,10 +43,10 @@ public:
 	void ExecuteExpression(Vector &result);
 	//! Execute the ExpressionExecutor and generate a selection vector from all true values in the result; this should
 	//! only be used with a single boolean expression
-	index_t SelectExpression(DataChunk &input, sel_t result[]);
+	idx_t SelectExpression(DataChunk &input, sel_t result[]);
 
 	//! Execute the expression with index `expr_idx` and store the result in the result vector
-	void ExecuteExpression(index_t expr_idx, Vector &result);
+	void ExecuteExpression(idx_t expr_idx, Vector &result);
 	//! Evaluate a scalar expression and fold it into a single value
 	static Value EvaluateScalar(Expression &expr);
 
@@ -58,6 +58,9 @@ public:
 	}
 	void SetChunk(DataChunk &chunk) {
 		SetChunk(&chunk);
+	}
+	VectorCardinality &GetCardinality() {
+		return chunk ? *chunk : constant_cardinality;
 	}
 
 	//! The expressions of the executor
@@ -98,17 +101,18 @@ protected:
 
 	//! Execute the (boolean-returning) expression and generate a selection vector with all entries that are "true" in
 	//! the result
-	index_t Select(Expression &expr, ExpressionState *state, sel_t result[]);
-	index_t DefaultSelect(Expression &expr, ExpressionState *state, sel_t result[]);
+	idx_t Select(Expression &expr, ExpressionState *state, sel_t result[]);
+	idx_t DefaultSelect(Expression &expr, ExpressionState *state, sel_t result[]);
 
-	index_t Select(BoundBetweenExpression &expr, ExpressionState *state, sel_t result[]);
-	index_t Select(BoundComparisonExpression &expr, ExpressionState *state, sel_t result[]);
-	index_t Select(BoundConjunctionExpression &expr, ExpressionState *state, sel_t result[]);
+	idx_t Select(BoundBetweenExpression &expr, ExpressionState *state, sel_t result[]);
+	idx_t Select(BoundComparisonExpression &expr, ExpressionState *state, sel_t result[]);
+	idx_t Select(BoundConjunctionExpression &expr, ExpressionState *state, sel_t result[]);
 
 	//! Verify that the output of a step in the ExpressionExecutor is correct
 	void Verify(Expression &expr, Vector &result);
 
 private:
+	VectorCardinality constant_cardinality = VectorCardinality(1);
 	//! The states of the expression executor; this holds any intermediates and temporary states of expressions
 	vector<unique_ptr<ExpressionExecutorState>> states;
 	//! The cached result of already-computed Common Subexpression results

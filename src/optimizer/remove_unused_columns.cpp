@@ -28,9 +28,9 @@ void RemoveUnusedColumns::ReplaceBinding(ColumnBinding current_binding, ColumnBi
 	}
 }
 
-template <class T> void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, index_t table_idx) {
-	index_t offset = 0;
-	for (index_t col_idx = 0; col_idx < list.size(); col_idx++) {
+template <class T> void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, idx_t table_idx) {
+	idx_t offset = 0;
+	for (idx_t col_idx = 0; col_idx < list.size(); col_idx++) {
 		auto current_binding = ColumnBinding(table_idx, col_idx + offset);
 		auto entry = column_references.find(current_binding);
 		if (entry == column_references.end()) {
@@ -57,7 +57,7 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 			if (aggr.expressions.size() == 0 && aggr.groups.size() == 0) {
 				// removed all expressions from the aggregate: push a COUNT(*)
 				aggr.expressions.push_back(
-				    make_unique<BoundAggregateExpression>(TypeId::BIGINT, CountStarFun::GetFunction(), false));
+				    make_unique<BoundAggregateExpression>(TypeId::INT64, CountStarFun::GetFunction(), false));
 			}
 		}
 
@@ -150,6 +150,14 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 		// distinct, all projected columns are used for the DISTINCT computation
 		// mark all columns as used and continue to the children
 		// FIXME: DISTINCT with expression list does not implicitly reference everything
+		everything_referenced = true;
+		break;
+	}
+	case LogicalOperatorType::RECURSIVE_CTE: {
+		everything_referenced = true;
+		break;
+	}
+	case LogicalOperatorType::CTE_REF: {
 		everything_referenced = true;
 		break;
 	}

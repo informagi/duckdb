@@ -14,7 +14,6 @@
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/index.hpp"
-#include "duckdb/common/types/static_vector.hpp"
 
 #include "duckdb/execution/index/art/art_key.hpp"
 #include "duckdb/execution/index/art/leaf.hpp"
@@ -27,7 +26,7 @@
 namespace duckdb {
 struct IteratorEntry {
 	Node *node = nullptr;
-	index_t pos = 0;
+	idx_t pos = 0;
 };
 
 struct Iterator {
@@ -48,7 +47,7 @@ struct ARTIndexScanState : public IndexScanState {
 	Value values[2];
 	ExpressionType expressions[2];
 	bool checked;
-	index_t result_index = 0;
+	idx_t result_index = 0;
 	vector<row_t> result_ids;
 	Iterator iterator;
 };
@@ -63,9 +62,6 @@ public:
 	unique_ptr<Node> tree;
 	//! True if machine is little endian
 	bool is_little_endian;
-	//! The maximum prefix length for compressed paths stored in the
-	//! header, if the path is longer it is loaded from the database on demand
-	uint32_t maxPrefix;
 	//! Whether or not the ART is an index built to enforce a UNIQUE constraint
 	bool is_unique;
 

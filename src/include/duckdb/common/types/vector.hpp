@@ -10,8 +10,9 @@
 
 #include "duckdb/common/bitset.hpp"
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/types/string_heap.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/enums/vector_type.hpp"
+#include "duckdb/common/types/vector_buffer.hpp"
 
 namespace duckdb {
 //! Type used for nullmasks
@@ -19,6 +20,21 @@ typedef bitset<STANDARD_VECTOR_SIZE> nullmask_t;
 
 //! Zero NULL mask: filled with the value 0 [READ ONLY]
 extern nullmask_t ZERO_MASK;
+
+class VectorCardinality {
+public:
+	VectorCardinality() : count(0), sel_vector(nullptr) {
+	}
+	VectorCardinality(idx_t count, sel_t *sel_vector = nullptr) : count(count), sel_vector(sel_vector) {
+	}
+
+	idx_t count;
+	sel_t *sel_vector;
+
+	idx_t get_index(idx_t idx) {
+		return sel_vector ? sel_vector[idx] : idx;
+	}
+};
 
 //!  Vector of values of a specified TypeId.
 /*!
@@ -49,100 +65,141 @@ class Vector {
 	friend class DataChunk;
 
 public:
-	//! The type of the elements stored in the vector.
-	TypeId type;
-	//! The amount of elements in the vector.
-	index_t count;
-	//! A pointer to the data.
-	data_ptr_t data;
-	//! The selection vector of the vector.
-	sel_t *sel_vector;
-	//! The null mask of the vector, if the Vector has any NULL values
-	nullmask_t nullmask;
-
-	Vector();
+	Vector(const VectorCardinality &cardinality);
 	//! Create a vector of size one holding the passed on value
-	Vector(Value value);
+	Vector(const VectorCardinality &cardinality, Value value);
+	//! Create an empty standard vector with a type, equivalent to calling Vector(type, true, false)
+	Vector(const VectorCardinality &cardinality, TypeId type);
 	//! Create a non-owning vector that references the specified data
-	Vector(TypeId type, data_ptr_t dataptr);
+	Vector(const VectorCardinality &cardinality, TypeId type, data_ptr_t dataptr);
 	//! Create an owning vector that holds at most STANDARD_VECTOR_SIZE entries.
 	/*!
 	    Create a new vector
 	    If create_data is true, the vector will be an owning empty vector.
 	    If zero_data is true, the allocated data will be zero-initialized.
 	*/
-	Vector(TypeId type, bool create_data, bool zero_data);
-	~Vector();
+	Vector(const VectorCardinality &cardinality, TypeId type, bool create_data, bool zero_data);
 	// implicit copying of Vectors is not allowed
 	Vector(const Vector &) = delete;
+	// but moving of vectors is allowed
+	Vector(Vector &&other) noexcept;
 
-	//! Create a vector that references the specified value. Note that if the
-	//! value goes out of scope or is deleted, the data in the vector becomes
-	//! corrupt. Use a ConstantVector if you want to use this method safely.
+	//! The vector type specifies how the data of the vector is physically stored (i.e. if it is a single repeated
+	//! constant, if it is compressed)
+	VectorType vector_type;
+	//! The type of the elements stored in the vector (e.g. integer, float)
+	TypeId type;
+	//! The null mask of the vector, if the Vector has any NULL values
+	nullmask_t nullmask;
+
+public:
+	idx_t size() const {
+		return vcardinality.count;
+	}
+	sel_t *sel_vector() const {
+		return vcardinality.sel_vector;
+	}
+	const VectorCardinality &cardinality() const {
+		return vcardinality;
+	}
+	bool SameCardinality(const Vector &other) const {
+		return size() == other.size() && sel_vector() == other.sel_vector();
+	}
+	bool SameCardinality(const VectorCardinality &other) const {
+		return size() == other.count && sel_vector() == other.sel_vector;
+	}
+
+	//! Causes this vector to reference the data held by the other vector.
+	void Reference(Vector &other);
+	//! Creates a reference to a slice of the other vector
+	void Slice(Vector &other, idx_t offset);
+	//! Create a vector that references the specified value.
 	void Reference(Value &value);
-
-	//! Destroys the vector, deleting any owned data and resetting it to an
-	//! empty vector of the specified type.
-	void Destroy();
-
-	//! Returns the [index] element of the Vector as a Value.
-	Value GetValue(index_t index) const;
-	//! Sets the [index] element of the Vector to the specified Value
-	void SetValue(index_t index, Value val);
-	//! Returns whether or not the value at the specified position is NULL
-	inline bool ValueIsNull(index_t index) const {
-		return nullmask[sel_vector ? sel_vector[index] : index];
-	}
-	//! Sets the value at the specified index to NULL
-	inline void SetNull(index_t index, bool null) {
-		nullmask[sel_vector ? sel_vector[index] : index] = null;
-	}
-	//! Sets the value of the vector at the specified index to the specified
-	//! string. Can only be used for VARCHAR vectors
-	void SetStringValue(index_t index, const char *value);
 
 	//! Creates the data of this vector with the specified type. Any data that
 	//! is currently in the vector is destroyed.
-	void Initialize(TypeId new_type, bool zero_data = false);
-	//! Casts the vector to the specified type
-	void Cast(TypeId new_type = TypeId::INVALID);
-	//! Appends the other vector to this vector.
-	void Append(Vector &other);
-	//! Copies the data from this vector to another vector.
-	void Copy(Vector &other, index_t offset = 0);
-	//! Moves the data from this vector to the other vector. Effectively,
-	//! "other" will become equivalent to this vector, and this vector will be
-	//! turned into an empty vector.
-	void Move(Vector &other);
+	void Initialize(TypeId new_type = TypeId::INVALID, bool zero_data = false, idx_t count = STANDARD_VECTOR_SIZE);
 	//! Flattens the vector, removing any selection vector
-	void Flatten();
-	//! Causes this vector to reference the data held by the other vector.
-	void Reference(Vector &other);
-
-	//! Creates a selection vector that points only to non-null values for the
-	//! given null mask. Returns the amount of not-null values.
-	//! result_assignment will be set to either result_vector (if there are null
-	//! values) or to nullptr (if there are no null values)
-	static index_t NotNullSelVector(const Vector &vector, sel_t *not_null_vector, sel_t *&result_assignment,
-	                                sel_t *null_vector = nullptr);
+	void ClearSelectionVector();
 
 	//! Converts this Vector to a printable string representation
 	string ToString() const;
 	void Print();
 
-	//! Returns true the vector holds only a single constant value and does not
-	//! have a selection vector
-	bool IsConstant() {
-		return count == 1 && !sel_vector;
-	}
+	//! Flatten the vector, removing any compression and turning it into a FLAT_VECTOR
+	void Normalify();
+
+	//! Turn the vector into a sequence vector
+	void Sequence(int64_t start, int64_t increment);
+	//! Get the sequence attributes of a sequence vector
+	void GetSequence(int64_t &start, int64_t &increment) const;
 
 	//! Verify that the Vector is in a consistent, not corrupt state. DEBUG
 	//! FUNCTION ONLY!
 	void Verify();
 
-	//! The stringheap of the vector
-	StringHeap string_heap;
-	//! If the vector owns data, this is the unique_ptr holds the actual data.
-	unique_ptr<data_t[]> owned_data;
+	data_ptr_t GetData() {
+		return data;
+	}
+
+	//! Add a string to the string heap of the vector (auxiliary data)
+	string_t AddString(const char *data, idx_t len);
+	//! Add a string to the string heap of the vector (auxiliary data)
+	string_t AddString(const char *data);
+	//! Add a string to the string heap of the vector (auxiliary data)
+	string_t AddString(string_t data);
+	//! Add a string to the string heap of the vector (auxiliary data)
+	string_t AddString(const string &data);
+	//! Allocates an empty string of the specified size, and returns a writable pointer that can be used to store the
+	//! result of an operation
+	string_t EmptyString(idx_t len);
+
+	//! Add a reference from this vector to the string heap of the provided vector
+	void AddHeapReference(Vector &other);
+
+	child_list_t<unique_ptr<Vector>> &GetChildren();
+	void AddChild(unique_ptr<Vector> vector, string name = "");
+
+	//! Returns the [index] element of the Vector as a Value. Note that this does not consider any selection vectors on
+	//! the vector, and returns the element that is physically in location [index].
+	Value GetValue(idx_t index) const;
+	//! Sets the [index] element of the Vector to the specified Value. Note that this does not consider any selection
+	//! vectors on the vector, and returns the element that is physically in location [index].
+	void SetValue(idx_t index, Value val);
+
+protected:
+	//! The cardinality of the vector
+	const VectorCardinality &vcardinality;
+	//! A pointer to the data.
+	data_ptr_t data;
+	//! The main buffer holding the data of the vector
+	buffer_ptr<VectorBuffer> buffer;
+	//! The secondary buffer holding auxiliary data of the vector, for example, a string vector uses this to store
+	//! strings
+	buffer_ptr<VectorBuffer> auxiliary;
+	//! child vectors used for nested data
+	child_list_t<unique_ptr<Vector>> children;
 };
+
+class FlatVector : public Vector {
+public:
+	FlatVector() : Vector(owned_cardinality) {
+	}
+	FlatVector(TypeId type) : Vector(owned_cardinality, type) {
+	}
+	FlatVector(TypeId type, data_ptr_t dataptr) : Vector(owned_cardinality, type, dataptr) {
+	}
+
+public:
+	void SetCount(idx_t count) {
+		owned_cardinality.count = count;
+	}
+	void SetSelVector(sel_t *sel) {
+		owned_cardinality.sel_vector = sel;
+	}
+
+protected:
+	VectorCardinality owned_cardinality;
+};
+
 } // namespace duckdb

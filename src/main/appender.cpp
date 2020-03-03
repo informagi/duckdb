@@ -43,50 +43,57 @@ void Appender::CheckInvalidated() {
 
 void Appender::BeginRow() {
 	CheckInvalidated();
-	column = 0;
 }
 
 void Appender::EndRow() {
 	CheckInvalidated();
 	// check that all rows have been appended to
-	if (column != chunk.column_count) {
-		string msg = "Call to EndRow before all rows have been appended to!";
-		Invalidate(msg, true);
-		throw Exception(msg);
+	if (column != chunk.column_count()) {
+		InvalidateException("Call to EndRow before all rows have been appended to!");
 	}
+	column = 0;
+	chunk.SetCardinality(chunk.size() + 1);
 	if (chunk.size() >= STANDARD_VECTOR_SIZE) {
 		Flush();
 	}
 }
 
-template<class T>
-void Appender::AppendValueInternal(T input) {
+template <class SRC, class DST> void Appender::AppendValueInternal(Vector &col, SRC input) {
+	((DST *)col.GetData())[col.size()] = Cast::Operation<SRC, DST>(input);
+}
+
+void Appender::InvalidateException(string msg) {
+	Invalidate(msg);
+	throw Exception(msg);
+}
+
+template <class T> void Appender::AppendValueInternal(T input) {
 	CheckInvalidated();
-	if (column >= chunk.column_count) {
-		throw Exception("Too many appends for chunk!");
+	if (column >= chunk.column_count()) {
+		InvalidateException("Too many appends for chunk!");
 	}
 	auto &col = chunk.data[column];
-	switch(col.type) {
-	case TypeId::BOOLEAN:
-		((bool *)col.data)[col.count++] = Cast::Operation<T, bool>(input);
+	switch (col.type) {
+	case TypeId::BOOL:
+		AppendValueInternal<T, bool>(col, input);
 		break;
-	case TypeId::TINYINT:
-		((int8_t *)col.data)[col.count++] = Cast::Operation<T, int8_t>(input);
+	case TypeId::INT8:
+		AppendValueInternal<T, int8_t>(col, input);
 		break;
-	case TypeId::SMALLINT:
-		((int16_t *)col.data)[col.count++] = Cast::Operation<T, int16_t>(input);
+	case TypeId::INT16:
+		AppendValueInternal<T, int16_t>(col, input);
 		break;
-	case TypeId::INTEGER:
-		((int32_t *)col.data)[col.count++] = Cast::Operation<T, int32_t>(input);
+	case TypeId::INT32:
+		AppendValueInternal<T, int32_t>(col, input);
 		break;
-	case TypeId::BIGINT:
-		((int64_t *)col.data)[col.count++] = Cast::Operation<T, int64_t>(input);
+	case TypeId::INT64:
+		AppendValueInternal<T, int64_t>(col, input);
 		break;
 	case TypeId::FLOAT:
-		((float *)col.data)[col.count++] = Cast::Operation<T, float>(input);
+		AppendValueInternal<T, float>(col, input);
 		break;
 	case TypeId::DOUBLE:
-		((double *)col.data)[col.count++] = Cast::Operation<T, double>(input);
+		AppendValueInternal<T, double>(col, input);
 		break;
 	default:
 		AppendValue(Value::CreateValue<T>(input));
@@ -116,7 +123,7 @@ template <> void Appender::Append(int64_t value) {
 }
 
 template <> void Appender::Append(const char *value) {
-	AppendValueInternal<const char*>(value);
+	AppendValueInternal<string_t>(string_t(value));
 }
 
 template <> void Appender::Append(double value) {
@@ -124,49 +131,38 @@ template <> void Appender::Append(double value) {
 }
 
 template <> void Appender::Append(Value value) {
-	if (column >= chunk.column_count) {
-		throw Exception("Too many appends for chunk!");
+	if (column >= chunk.column_count()) {
+		InvalidateException("Too many appends for chunk!");
 	}
 	AppendValue(move(value));
 }
 
 template <> void Appender::Append(nullptr_t value) {
-	if (column >= chunk.column_count) {
-		throw Exception("Too many appends for chunk!");
+	if (column >= chunk.column_count()) {
+		InvalidateException("Too many appends for chunk!");
 	}
 	auto &col = chunk.data[column++];
-	col.nullmask[col.count++] = true;
+	col.nullmask[col.size()] = true;
 }
 
 void Appender::AppendValue(Value value) {
-	chunk.data[column].SetValue(chunk.data[column].count++, value);
+	chunk.SetValue(column, chunk.data[column].size(), value);
 	column++;
 }
 
-Vector &Appender::GetAppendVector(index_t col_idx) {
-	if (col_idx >= chunk.column_count) {
-		throw Exception("Column index out of range!");
-	}
-	return chunk.data[col_idx];
-}
-
 void Appender::Flush() {
-	if (chunk.size() == 0) {
-		return;
-	}
 	CheckInvalidated();
 	try {
 		// check that all vectors have the same length before appending
-		index_t chunk_size = chunk.size();
-		for(index_t i = 1; i < chunk.column_count; i++) {
-			if (chunk.data[i].count != chunk_size) {
-				throw Exception("Failed to Flush appender: vectors have different number of rows");
-			}
+		if (column != 0) {
+			throw Exception("Failed to Flush appender: incomplete append to row!");
 		}
 
+		if (chunk.size() == 0) {
+			return;
+		}
 		con.Append(*description, chunk);
 	} catch (Exception &ex) {
-		con.context->RemoveAppender(this);
 		Invalidate(ex.what());
 		throw ex;
 	}
@@ -178,10 +174,10 @@ void Appender::Close() {
 	if (!invalidated_msg.empty()) {
 		return;
 	}
-	if (column == 0 || column == chunk.column_count) {
+	if (column == 0 || column == chunk.column_count()) {
 		Flush();
 	}
-	Invalidate("The appender has been closed!", true);
+	Invalidate("The appender has been closed!");
 }
 
 void Appender::Invalidate(string msg, bool close) {

@@ -7,17 +7,21 @@ using namespace std;
 
 namespace duckdb {
 
-struct LikeOperator {
-	static bool Operation(const char *left, const char *right, const char *escape = nullptr);
-};
+static bool like_operator(const char *s, const char *pattern, const char *escape);
 
-struct NotLikeOperator {
-	static inline bool Operation(const char *left, const char *right, const char *escape = nullptr) {
-		return !LikeOperator::Operation(left, right, escape);
+struct LikeOperator {
+	template <class TA, class TB, class TR> static inline TR Operation(TA left, TB right) {
+		return like_operator(left.GetData(), right.GetData(), nullptr);
 	}
 };
 
-bool LikeOperator::Operation(const char *s, const char *pattern, const char *escape) {
+struct NotLikeOperator {
+	template <class TA, class TB, class TR> static inline TR Operation(TA left, TB right) {
+		return !like_operator(left.GetData(), right.GetData(), nullptr);
+	}
+};
+
+bool like_operator(const char *s, const char *pattern, const char *escape) {
 	const char *t, *p;
 
 	t = s;
@@ -39,7 +43,7 @@ bool LikeOperator::Operation(const char *s, const char *pattern, const char *esc
 				return true; /* tail is acceptable */
 			}
 			for (; *p && *t; t++) {
-				if (LikeOperator::Operation(t, p, escape)) {
+				if (like_operator(t, p, escape)) {
 					return true;
 				}
 			}
@@ -60,12 +64,10 @@ bool LikeOperator::Operation(const char *s, const char *pattern, const char *esc
 }
 
 void LikeFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("~~", {SQLType::VARCHAR, SQLType::VARCHAR}, SQLType::BOOLEAN,
-	                   ScalarFunction::BinaryFunction<const char *, const char *, bool, LikeOperator, true>));
-	set.AddFunction(
-	    ScalarFunction("!~~", {SQLType::VARCHAR, SQLType::VARCHAR}, SQLType::BOOLEAN,
-	                   ScalarFunction::BinaryFunction<const char *, const char *, bool, NotLikeOperator, true>));
+	set.AddFunction(ScalarFunction("~~", {SQLType::VARCHAR, SQLType::VARCHAR}, SQLType::BOOLEAN,
+	                               ScalarFunction::BinaryFunction<string_t, string_t, bool, LikeOperator, true>));
+	set.AddFunction(ScalarFunction("!~~", {SQLType::VARCHAR, SQLType::VARCHAR}, SQLType::BOOLEAN,
+	                               ScalarFunction::BinaryFunction<string_t, string_t, bool, NotLikeOperator, true>));
 }
 
 } // namespace duckdb

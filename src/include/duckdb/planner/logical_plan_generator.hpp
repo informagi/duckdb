@@ -34,14 +34,14 @@ private:
 	unique_ptr<LogicalOperator> CreatePlan(BoundCopyStatement &statement);
 	unique_ptr<LogicalOperator> CreatePlan(BoundDeleteStatement &statement);
 	unique_ptr<LogicalOperator> CreatePlan(BoundUpdateStatement &statement);
-	unique_ptr<LogicalOperator> CreatePlan(BoundCreateTableStatement &statement);
-	unique_ptr<LogicalOperator> CreatePlan(BoundCreateIndexStatement &statement);
+	unique_ptr<LogicalOperator> CreatePlan(BoundCreateStatement &statement);
 	unique_ptr<LogicalOperator> CreatePlan(BoundExecuteStatement &statement);
 	unique_ptr<LogicalOperator> CreatePlan(BoundSimpleStatement &statement);
 	unique_ptr<LogicalOperator> CreatePlan(BoundExplainStatement &stmt);
 
 	unique_ptr<LogicalOperator> CreatePlan(BoundSelectNode &node);
 	unique_ptr<LogicalOperator> CreatePlan(BoundSetOperationNode &node);
+	unique_ptr<LogicalOperator> CreatePlan(BoundRecursiveCTENode &node);
 
 	unique_ptr<LogicalOperator> VisitQueryNode(BoundQueryNode &node, unique_ptr<LogicalOperator> root);
 
@@ -54,6 +54,7 @@ private:
 	unique_ptr<LogicalOperator> CreatePlan(BoundTableFunction &ref);
 	unique_ptr<LogicalOperator> CreatePlan(BoundEmptyTableRef &ref);
 	unique_ptr<LogicalOperator> CreatePlan(BoundExpressionListRef &ref);
+	unique_ptr<LogicalOperator> CreatePlan(BoundCTERef &ref);
 
 	void PlanSubqueries(unique_ptr<Expression> *expr, unique_ptr<LogicalOperator> *root);
 

@@ -51,7 +51,7 @@ void ClientContext::Cleanup() {
 		statement->is_invalidated = true;
 	}
 	for (auto &appender : appenders) {
-		appender->Invalidate("Connection has been closed!");
+		appender->Invalidate("Connection has been closed!", false);
 	}
 	CleanupInternal();
 }
@@ -200,7 +200,8 @@ unique_ptr<QueryResult> ClientContext::ExecutePreparedStatement(const string &qu
 		throw Exception("Current transaction is aborted (please ROLLBACK)");
 	}
 	if (db.access_mode == AccessMode::READ_ONLY && !statement.read_only) {
-		throw Exception(StringUtil::Format("Cannot execute statement of type \"%s\" in read-only mode!", StatementTypeToString(statement.statement_type).c_str()));
+		throw Exception(StringUtil::Format("Cannot execute statement of type \"%s\" in read-only mode!",
+		                                   StatementTypeToString(statement.statement_type).c_str()));
 	}
 
 	// bind the bound values before execution
@@ -272,7 +273,7 @@ unique_ptr<PreparedStatement> ClientContext::Prepare(string query) {
 			throw Exception(result->error);
 		}
 		auto prepared_catalog = (PreparedStatementCatalogEntry *)prepared_statements->GetRootEntry(prepare_name);
-		auto prepared_object = make_unique<PreparedStatement>(this, prepare_name, *prepared_catalog->prepared,
+		auto prepared_object = make_unique<PreparedStatement>(this, prepare_name, query, *prepared_catalog->prepared,
 		                                                      parser.n_prepared_parameters);
 		prepared_statement_objects.insert(prepared_object.get());
 		return prepared_object;
@@ -281,7 +282,8 @@ unique_ptr<PreparedStatement> ClientContext::Prepare(string query) {
 	}
 }
 
-unique_ptr<QueryResult> ClientContext::Execute(string name, vector<Value> &values, bool allow_stream_result) {
+unique_ptr<QueryResult> ClientContext::Execute(string name, vector<Value> &values, bool allow_stream_result,
+                                               string query) {
 	lock_guard<mutex> client_guard(context_lock);
 	try {
 		InitialCleanup();
@@ -296,7 +298,7 @@ unique_ptr<QueryResult> ClientContext::Execute(string name, vector<Value> &value
 		execute->values.push_back(make_unique<ConstantExpression>(SQLTypeFromInternalType(val.type), val));
 	}
 
-	return RunStatement("", move(execute), allow_stream_result);
+	return RunStatement(query, move(execute), allow_stream_result);
 }
 void ClientContext::RemovePreparedStatement(PreparedStatement *statement) {
 	lock_guard<mutex> client_guard(context_lock);
@@ -350,7 +352,7 @@ unique_ptr<QueryResult> ClientContext::RunStatement(const string &query, unique_
 		statement = move(copied_statement);
 	}
 	// start the profiler
-	profiler.StartQuery(query);
+	profiler.StartQuery(query, *statement);
 	try {
 		result = RunStatementInternal(query, move(statement), allow_stream_result);
 	} catch (StandardException &ex) {
@@ -391,7 +393,7 @@ unique_ptr<QueryResult> ClientContext::RunStatements(const string &query, vector
 	// iterate over them and execute them one by one
 	unique_ptr<QueryResult> result;
 	QueryResult *last_result = nullptr;
-	for (index_t i = 0; i < statements.size(); i++) {
+	for (idx_t i = 0; i < statements.size(); i++) {
 		auto &statement = statements[i];
 		bool is_last_statement = i + 1 == statements.size();
 		auto current_result = RunStatement(query, move(statement), allow_stream_result && is_last_statement);
@@ -458,7 +460,7 @@ void ClientContext::Invalidate() {
 	}
 	// and close any open appenders
 	for (auto &appender : appenders) {
-		appender->Invalidate("Database that this appender belongs to has been closed!");
+		appender->Invalidate("Database that this appender belongs to has been closed!", false);
 	}
 	appenders.clear();
 }
@@ -494,7 +496,7 @@ string ClientContext::VerifyQuery(string query, unique_ptr<SQLStatement> stateme
 	auto &de_expr_list = deserialized_stmt->node->GetSelectList();
 	auto &cp_expr_list = copied_stmt->node->GetSelectList();
 	assert(orig_expr_list.size() == de_expr_list.size() && cp_expr_list.size() == de_expr_list.size());
-	for (index_t i = 0; i < orig_expr_list.size(); i++) {
+	for (idx_t i = 0; i < orig_expr_list.size(); i++) {
 		// check that the expressions are equivalent
 		assert(orig_expr_list[i]->Equals(de_expr_list[i].get()));
 		assert(orig_expr_list[i]->Equals(cp_expr_list[i].get()));
@@ -504,9 +506,9 @@ string ClientContext::VerifyQuery(string query, unique_ptr<SQLStatement> stateme
 		assert(orig_expr_list[i]->Hash() == cp_expr_list[i]->Hash());
 	}
 	// now perform additional checking within the expressions
-	for (index_t outer_idx = 0; outer_idx < orig_expr_list.size(); outer_idx++) {
+	for (idx_t outer_idx = 0; outer_idx < orig_expr_list.size(); outer_idx++) {
 		auto hash = orig_expr_list[outer_idx]->Hash();
-		for (index_t inner_idx = 0; inner_idx < orig_expr_list.size(); inner_idx++) {
+		for (idx_t inner_idx = 0; inner_idx < orig_expr_list.size(); inner_idx++) {
 			auto hash2 = orig_expr_list[inner_idx]->Hash();
 			if (hash != hash2) {
 				// if the hashes are not equivalent, the expressions should not be equivalent
@@ -613,7 +615,7 @@ unique_ptr<TableDescription> ClientContext::TableInfo(string schema_name, string
 	unique_ptr<TableDescription> result;
 	try {
 		// obtain the table info
-		auto table = db.catalog->GetTable(*this, schema_name, table_name);
+		auto table = db.catalog->GetEntry<TableCatalogEntry>(*this, schema_name, table_name);
 		// write the table info to the result
 		result = make_unique<TableDescription>();
 		result->schema = schema_name;
@@ -645,12 +647,12 @@ void ClientContext::Append(TableDescription &description, DataChunk &chunk) {
 		transaction.BeginTransaction();
 	}
 	try {
-		auto table_entry = db.catalog->GetTable(*this, description.schema, description.table);
+		auto table_entry = db.catalog->GetEntry<TableCatalogEntry>(*this, description.schema, description.table);
 		// verify that the table columns and types match up
 		if (description.columns.size() != table_entry->columns.size()) {
 			throw Exception("Failed to append: table entry has different number of columns!");
 		}
-		for (index_t i = 0; i < description.columns.size(); i++) {
+		for (idx_t i = 0; i < description.columns.size(); i++) {
 			if (description.columns[i].type != table_entry->columns[i].type) {
 				throw Exception("Failed to append: table entry has different number of columns!");
 			}

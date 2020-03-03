@@ -92,7 +92,7 @@ void HandleOptions(PGCopyStmt *stmt, CopyInfo &info) {
 				break;
 			case T_PGString: {
 				auto val = duckdb::Value(string(header_val->val.str));
-				info.header = val.CastAs(TypeId::BOOLEAN).value_.boolean;
+				info.header = val.CastAs(TypeId::BOOL).value_.boolean;
 				break;
 			}
 			default:
@@ -196,7 +196,7 @@ unique_ptr<CopyStatement> Transformer::TransformCopy(PGNode *node) {
 			auto statement = make_unique<SelectNode>();
 			statement->from_table = move(ref);
 			if (stmt->attlist) {
-				for (index_t i = 0; i < info.select_list.size(); i++)
+				for (idx_t i = 0; i < info.select_list.size(); i++)
 					statement->select_list.push_back(make_unique<ColumnRefExpression>(info.select_list[i]));
 			} else {
 				statement->select_list.push_back(make_unique<StarExpression>());

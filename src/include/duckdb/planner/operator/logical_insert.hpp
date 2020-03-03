@@ -20,7 +20,7 @@ public:
 	}
 
 	vector<vector<unique_ptr<Expression>>> insert_values;
-	vector<index_t> column_index_map;
+	vector<idx_t> column_index_map;
 
 	//! The base table to insert into
 	TableCatalogEntry *table;
@@ -29,7 +29,7 @@ public:
 
 protected:
 	void ResolveTypes() override {
-		types.push_back(TypeId::BIGINT);
+		types.push_back(TypeId::INT64);
 	}
 };
 } // namespace duckdb

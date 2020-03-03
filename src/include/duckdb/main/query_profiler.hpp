@@ -20,13 +20,14 @@
 
 namespace duckdb {
 class PhysicalOperator;
+class SQLStatement;
 
 //! The QueryProfiler can be used to measure timings of queries
 class QueryProfiler {
 public:
 	struct TimingInformation {
 		double time = 0;
-		index_t elements = 0;
+		idx_t elements = 0;
 
 		TimingInformation() : time(0), elements(0) {
 		}
@@ -37,19 +38,19 @@ public:
 		vector<string> split_extra_info;
 		TimingInformation info;
 		vector<unique_ptr<TreeNode>> children;
-		index_t depth = 0;
+		idx_t depth = 0;
 	};
 
 private:
-	static index_t GetDepth(QueryProfiler::TreeNode &node);
-	unique_ptr<TreeNode> CreateTree(PhysicalOperator *root, index_t depth = 0);
+	static idx_t GetDepth(QueryProfiler::TreeNode &node);
+	unique_ptr<TreeNode> CreateTree(PhysicalOperator *root, idx_t depth = 0);
 
-	static index_t RenderTreeRecursive(TreeNode &node, vector<string> &render, vector<index_t> &render_heights,
-	                                   index_t base_render_x = 0, index_t start_depth = 0, index_t depth = 0);
+	static idx_t RenderTreeRecursive(TreeNode &node, vector<string> &render, vector<idx_t> &render_heights,
+	                                 idx_t base_render_x = 0, idx_t start_depth = 0, idx_t depth = 0);
 	static string RenderTree(TreeNode &node);
 
 public:
-	QueryProfiler() : automatic_print_format(ProfilerPrintFormat::NONE), enabled(false) {
+	QueryProfiler() : automatic_print_format(ProfilerPrintFormat::NONE), enabled(false), running(false) {
 	}
 
 	void Enable() {
@@ -64,7 +65,7 @@ public:
 		return enabled;
 	}
 
-	void StartQuery(string query);
+	void StartQuery(string query, SQLStatement &statement);
 	void EndQuery();
 
 	void StartPhase(string phase);
@@ -88,6 +89,8 @@ public:
 private:
 	//! Whether or not query profiling is enabled
 	bool enabled;
+	//! Whether or not the query profiler is running
+	bool running;
 
 	//! The root of the query tree
 	unique_ptr<TreeNode> root;

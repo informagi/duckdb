@@ -10,27 +10,24 @@ using namespace std;
 namespace duckdb {
 
 static void current_time_function(DataChunk &input, ExpressionState &state, Vector &result) {
-	assert(input.column_count == 0);
+	assert(input.column_count() == 0);
 
 	auto val = Value::INTEGER(Timestamp::GetTime(Timestamp::GetCurrentTimestamp()));
-	result.count = 1;
-	result.SetValue(0, val);
+	result.Reference(val);
 }
 
 static void current_date_function(DataChunk &input, ExpressionState &state, Vector &result) {
-	assert(input.column_count == 0);
+	assert(input.column_count() == 0);
 
 	auto val = Value::INTEGER(Timestamp::GetDate(Timestamp::GetCurrentTimestamp()));
-	result.count = 1;
-	result.SetValue(0, val);
+	result.Reference(val);
 }
 
 static void current_timestamp_function(DataChunk &input, ExpressionState &state, Vector &result) {
-	assert(input.column_count == 0);
+	assert(input.column_count() == 0);
 
 	auto val = Value::TIMESTAMP(Timestamp::GetCurrentTimestamp());
-	result.count = 1;
-	result.SetValue(0, val);
+	result.Reference(val);
 }
 
 void CurrentTimeFun::RegisterFunction(BuiltinFunctions &set) {

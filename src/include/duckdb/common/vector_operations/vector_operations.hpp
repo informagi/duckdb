@@ -45,17 +45,6 @@ struct VectorOperations {
 	//! A += B
 	static void AddInPlace(Vector &A, int64_t B);
 
-	//! A %= B
-	static void ModuloInPlace(Vector &A, Vector &B);
-	//! A %= B
-	static void ModuloInPlace(Vector &A, int64_t B);
-
-	//===--------------------------------------------------------------------===//
-	// In-Place Bitwise Operators
-	//===--------------------------------------------------------------------===//
-	//! A ^= B
-	static void BitwiseXORInPlace(Vector &A, Vector &B);
-
 	//===--------------------------------------------------------------------===//
 	// NULL Operators
 	//===--------------------------------------------------------------------===//
@@ -63,6 +52,14 @@ struct VectorOperations {
 	static void IsNotNull(Vector &A, Vector &result);
 	//! result = IS NULL (A)
 	static void IsNull(Vector &A, Vector &result);
+	// Returns whether or not a vector has a NULL value
+	static bool HasNull(Vector &A);
+	//! Creates a selection vector that points only to non-null values for the
+	//! given null mask. Returns the amount of not-null values.
+	//! result_assignment will be set to either result_vector (if there are null
+	//! values) or to nullptr (if there are no null values)
+	static idx_t NotNullSelVector(Vector &vector, sel_t *not_null_vector, sel_t *&result_assignment,
+	                              sel_t *null_vector = nullptr);
 
 	//===--------------------------------------------------------------------===//
 	// Boolean Operations
@@ -94,31 +91,18 @@ struct VectorOperations {
 	// Select Comparison Operations
 	//===--------------------------------------------------------------------===//
 	// result = A == B
-	static index_t SelectEquals(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectEquals(Vector &A, Vector &B, sel_t result[]);
 	// result = A != B
-	static index_t SelectNotEquals(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectNotEquals(Vector &A, Vector &B, sel_t result[]);
 	// result = A > B
-	static index_t SelectGreaterThan(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectGreaterThan(Vector &A, Vector &B, sel_t result[]);
 	// result = A >= B
-	static index_t SelectGreaterThanEquals(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectGreaterThanEquals(Vector &A, Vector &B, sel_t result[]);
 	// result = A < B
-	static index_t SelectLessThan(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectLessThan(Vector &A, Vector &B, sel_t result[]);
 	// result = A <= B
-	static index_t SelectLessThanEquals(Vector &A, Vector &B, sel_t result[]);
+	static idx_t SelectLessThanEquals(Vector &A, Vector &B, sel_t result[]);
 
-	//===--------------------------------------------------------------------===//
-	// Aggregates
-	//===--------------------------------------------------------------------===//
-	// SUM(A)
-	static Value Sum(Vector &A);
-	// COUNT(A)
-	static Value Count(Vector &A);
-	// MAX(A)
-	static Value Max(Vector &A);
-	// MIN(A)
-	static Value Min(Vector &A);
-	// Returns whether or not a vector has a NULL value
-	static bool HasNull(Vector &A);
 	//===--------------------------------------------------------------------===//
 	// Scatter methods
 	//===--------------------------------------------------------------------===//
@@ -133,25 +117,21 @@ struct VectorOperations {
 		static void Min(Vector &source, Vector &dest);
 		//! dest[i] = dest[i] + 1
 		//! For this operation the destination type does not need to match source.type
-		//! Instead, this can **only** be used when the destination type is TypeId::BIGINT
+		//! Instead, this can **only** be used when the destination type is TypeId::INT64
 		static void AddOne(Vector &source, Vector &dest);
 		//! dest[i] = dest[i]
 		static void SetFirst(Vector &source, Vector &dest);
 		// dest[i] = dest[i] + source
-		static void Add(int64_t source, void **dest, index_t length);
+		static void Add(int64_t source, void **dest, idx_t length);
 		//! Similar to Set, but also write NullValue<T> if set_null = true, or ignore null values entirely if set_null =
 		//! false
-		static void SetAll(Vector &source, Vector &dest, bool set_null = false, index_t offset = 0);
+		static void SetAll(Vector &source, Vector &dest, bool set_null = false, idx_t offset = 0);
 	};
 	// make sure dest.count is set for gather methods!
 	struct Gather {
 		//! dest.data[i] = ptr[i]. If set_null is true, NullValue<T> is checked for and converted to the nullmask in
 		//! dest. If set_null is false, NullValue<T> is ignored.
-		static void Set(Vector &source, Vector &dest, bool set_null = true, index_t offset = 0);
-		//! Append the values from source to the dest vector. If set_null is true, NullValue<T> is checked for and
-		//! converted to the nullmask in dest. If set_null is false, NullValue<T> is ignored. If offset is set, it is
-		//! added to
-		static void Append(Vector &source, Vector &dest, index_t offset = 0, bool set_null = true);
+		static void Set(Vector &source, Vector &dest, bool set_null = true, idx_t offset = 0);
 	};
 
 	//===--------------------------------------------------------------------===//
@@ -161,7 +141,7 @@ struct VectorOperations {
 	static void Sort(Vector &vector, sel_t result[]);
 	// Sort the vector, setting the given selection vector to a sorted state
 	// while ignoring NULL values.
-	static void Sort(Vector &vector, sel_t *result_vector, index_t count, sel_t result[]);
+	static void Sort(Vector &vector, sel_t *result_vector, idx_t count, sel_t result[]);
 	// Checks whether or not the vector contains only unique values
 	static bool Unique(Vector &vector);
 	//===--------------------------------------------------------------------===//
@@ -175,7 +155,8 @@ struct VectorOperations {
 	//===--------------------------------------------------------------------===//
 	// Generate functions
 	//===--------------------------------------------------------------------===//
-	static void GenerateSequence(Vector &result, int64_t start = 0, int64_t increment = 1);
+	static void GenerateSequence(Vector &result, int64_t start = 0, int64_t increment = 1,
+	                             bool ignore_sel_vector = false);
 	//===--------------------------------------------------------------------===//
 	// Helpers
 	//===--------------------------------------------------------------------===//
@@ -184,16 +165,17 @@ struct VectorOperations {
 	// Cast the data from the source type to the target type
 	static void Cast(Vector &source, Vector &result);
 	// Copy the data of <source> to the target location
-	static void Copy(Vector &source, void *target, index_t offset = 0, index_t element_count = 0);
+	static void Copy(Vector &source, void *target, idx_t offset = 0, idx_t element_count = 0);
 	// Copy the data of <source> to the target vector
-	static void Copy(Vector &source, Vector &target, index_t offset = 0);
+	static void Copy(Vector &source, Vector &target, idx_t offset = 0);
+	// Append the data of <source> to the target vector
+	static void Append(Vector &source, Vector &target);
 	// Copy the data of <source> to the target location, setting null values to
 	// NullValue<T>. Used to store data without separate NULL mask.
-	static void CopyToStorage(Vector &source, void *target, index_t offset = 0, index_t element_count = 0);
-	// Appends the data of <source> to the target vector, setting the nullmask
-	// for any NullValue<T> of source. Used to go back from storage to a
-	// nullmask.
-	static void AppendFromStorage(Vector &source, Vector &target, bool has_null = true);
+	static void CopyToStorage(Vector &source, void *target, idx_t offset = 0, idx_t element_count = 0);
+	// Reads the data of <source> to the target vector, setting the nullmask
+	// for any NullValue<T> of source. Used to go back from storage to a proper vector
+	static void ReadFromStorage(Vector &source, Vector &target);
 
 	// Set all elements of the vector to the given constant value
 	static void Set(Vector &result, Value value);
@@ -202,8 +184,8 @@ struct VectorOperations {
 	//===--------------------------------------------------------------------===//
 	// Exec
 	//===--------------------------------------------------------------------===//
-	template <class T> static void Exec(sel_t *sel_vector, index_t count, T &&fun, index_t offset = 0) {
-		index_t i = offset;
+	template <class T> static void Exec(sel_t *sel_vector, idx_t count, T &&fun, idx_t offset = 0) {
+		idx_t i = offset;
 		if (sel_vector) {
 			//#pragma GCC ivdep
 			for (; i < count; i++) {
@@ -218,13 +200,21 @@ struct VectorOperations {
 	}
 	//! Exec over the set of indexes, calls the callback function with (i) =
 	//! index, dependent on selection vector and (k) = count
-	template <class T> static void Exec(const Vector &vector, T &&fun, index_t offset = 0, index_t count = 0) {
-		if (count == 0) {
-			count = vector.count;
+	template <class T> static void Exec(const Vector &vector, T &&fun, idx_t offset = 0, idx_t count = 0) {
+		sel_t *sel_vector;
+		if (vector.vector_type == VectorType::CONSTANT_VECTOR) {
+			count = 1;
+			sel_vector = nullptr;
 		} else {
-			count += offset;
+			assert(vector.vector_type == VectorType::FLAT_VECTOR);
+			if (count == 0) {
+				count = vector.size();
+			} else {
+				count = count + offset;
+			}
+			sel_vector = vector.sel_vector();
 		}
-		Exec(vector.sel_vector, count, fun, offset);
+		VectorOperations::Exec(sel_vector, count, fun, offset);
 	}
 
 	//! Exec over a specific type. Note that it is up to the caller to verify
@@ -232,89 +222,29 @@ struct VectorOperations {
 	//! is equivalent to calling ::Exec() and performing data[i] for
 	//! every entry
 	template <typename T, class FUNC>
-	static void ExecType(Vector &vector, FUNC &&fun, index_t offset = 0, index_t limit = 0) {
-		auto data = (T *)vector.data;
+	static void ExecType(Vector &vector, FUNC &&fun, idx_t offset = 0, idx_t limit = 0) {
+		auto data = (T *)vector.GetData();
 		VectorOperations::Exec(
-		    vector, [&](index_t i, index_t k) { fun(data[i], i, k); }, offset, limit);
+		    vector, [&](idx_t i, idx_t k) { fun(data[i], i, k); }, offset, limit);
 	}
-	//! NAryExec handles NULL values, sel_vector and count in the presence of potential constants
-	template <bool HANDLE_NULLS>
-	static void NAryExec(index_t N, Vector *vectors[], index_t multipliers[], Vector &result) {
-		// initialize result to a constant (no sel_vector, count = 1)
-		result.sel_vector = nullptr;
-		result.count = 1;
-		for (index_t i = 0; i < N; i++) {
-			// for every vector, check if it is a constant
-			if (vectors[i]->IsConstant()) {
-				// if it is a constant, we set the index multiplier to 0
-				// this ensures we always fetch the first element
-				multipliers[i] = 0;
-				if (HANDLE_NULLS && vectors[i]->nullmask[0]) {
-					// if there is a constant NULL, we set the entire result to NULL
-					result.nullmask.set();
-				}
-			} else {
-				// if it is not a constant, we set the multiplier to 1
-				// we set the result sel_vector/count to the count of this vector
-				multipliers[i] = 1;
-				result.sel_vector = vectors[i]->sel_vector;
-				result.count = vectors[i]->count;
-				if (HANDLE_NULLS) {
-					// if we are handling nulls here, we OR this nullmask together with the result
-					result.nullmask |= vectors[i]->nullmask;
-				}
+
+	template <typename T, class FUNC> static void ExecNumeric(Vector &vector, FUNC &&fun) {
+		if (vector.vector_type == VectorType::SEQUENCE_VECTOR) {
+			int64_t start, increment;
+			vector.GetSequence(start, increment);
+			auto vsel = vector.sel_vector();
+			for (idx_t i = 0; i < vector.size(); i++) {
+				idx_t idx = vsel ? vsel[i] : i;
+				fun((T)(start + increment * idx), idx, i);
 			}
+		} else if (vector.vector_type == VectorType::CONSTANT_VECTOR) {
+			auto data = (T *)vector.GetData();
+			fun(data[0], 0, 0);
+		} else {
+			assert(vector.vector_type == VectorType::FLAT_VECTOR);
+			auto data = (T *)vector.GetData();
+			VectorOperations::Exec(vector, [&](idx_t i, idx_t k) { fun(data[i], i, k); });
 		}
-	}
-	template <typename TA, typename TB, typename TR, class FUNC, bool SKIP_NULLS = true, bool HANDLE_NULLS = true>
-	static void BinaryExec(Vector &a, Vector &b, Vector &result, FUNC &&fun) {
-		Vector *vectors[2] = {&a, &b};
-		index_t multipliers[2];
-		VectorOperations::NAryExec<HANDLE_NULLS>(2, vectors, multipliers, result);
-
-		auto adata = (TA *)a.data;
-		auto bdata = (TB *)b.data;
-		auto rdata = (TR *)result.data;
-		VectorOperations::Exec(result, [&](index_t i, index_t k) {
-			if (SKIP_NULLS && result.nullmask[i]) {
-				return;
-			}
-			rdata[i] = fun(adata[multipliers[0] * i], bdata[multipliers[1] * i], i);
-		});
-	}
-	template <typename TA, typename TB, typename TC, typename TR, class FUNC, bool SKIP_NULLS = true,
-	          bool HANDLE_NULLS = true>
-	static void TernaryExec(Vector &a, Vector &b, Vector &c, Vector &result, FUNC &&fun) {
-		Vector *vectors[3] = {&a, &b, &c};
-		index_t multipliers[3];
-		VectorOperations::NAryExec<HANDLE_NULLS>(3, vectors, multipliers, result);
-
-		auto adata = (TA *)a.data;
-		auto bdata = (TB *)b.data;
-		auto cdata = (TC *)c.data;
-		auto rdata = (TR *)result.data;
-		VectorOperations::Exec(result, [&](index_t i, index_t k) {
-			if (SKIP_NULLS && result.nullmask[i]) {
-				return;
-			}
-			rdata[i] = fun(adata[multipliers[0] * i], bdata[multipliers[1] * i], cdata[multipliers[2] * i], i);
-		});
-	}
-
-	template <class FUNC> static void MultiaryExec(DataChunk &args, Vector &result, FUNC &&fun) {
-		result.sel_vector = nullptr;
-		result.count = 1;
-		vector<index_t> mul(args.column_count, 0);
-
-		for (index_t i = 0; i < args.column_count; i++) {
-			auto &input = args.data[i];
-			if (!input.IsConstant()) {
-				result.sel_vector = input.sel_vector;
-				result.count = input.count;
-			}
-			mul[i] = input.IsConstant() ? 0 : 1;
-		}
-		VectorOperations::Exec(result, [&](index_t i, index_t k) { fun(mul, i); });
 	}
 };
 } // namespace duckdb

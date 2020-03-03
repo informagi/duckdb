@@ -3,6 +3,9 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/common/vector_operations/unary_executor.hpp"
+#include "duckdb/common/vector_operations/binary_executor.hpp"
+#include "duckdb/common/vector_operations/ternary_executor.hpp"
 
 #include "re2/re2.h"
 
@@ -23,6 +26,10 @@ unique_ptr<FunctionData> RegexpMatchesBindData::Copy() {
 	return make_unique<RegexpMatchesBindData>(move(constant_pattern), range_min, range_max, range_success);
 }
 
+static inline re2::StringPiece CreateStringPiece(string_t &input) {
+	return re2::StringPiece(input.GetData(), input.GetSize());
+}
+
 static void regexp_matches_function(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &strings = args.data[0];
 	auto &patterns = args.data[1];
@@ -34,18 +41,18 @@ static void regexp_matches_function(DataChunk &args, ExpressionState &state, Vec
 	options.set_log_errors(false);
 
 	if (info.constant_pattern) {
-		VectorOperations::BinaryExec<const char *, const char *, bool>(
-		    strings, patterns, result, [&](const char *string, const char *pattern, index_t result_index) {
-			    return RE2::PartialMatch(string, *info.constant_pattern);
-		    });
+		// FIXME: this should be a unary loop
+		UnaryExecutor::Execute<string_t, bool, true>(strings, result, [&](string_t input) {
+			return RE2::PartialMatch(CreateStringPiece(input), *info.constant_pattern);
+		});
 	} else {
-		VectorOperations::BinaryExec<const char *, const char *, bool>(
-		    strings, patterns, result, [&](const char *string, const char *pattern, index_t result_index) {
-			    RE2 re(pattern, options);
+		BinaryExecutor::Execute<string_t, string_t, bool, true>(
+		    strings, patterns, result, [&](string_t input, string_t pattern) {
+			    RE2 re(CreateStringPiece(pattern), options);
 			    if (!re.ok()) {
 				    throw Exception(re.error());
 			    }
-			    return RE2::PartialMatch(string, re);
+			    return RE2::PartialMatch(CreateStringPiece(input), re);
 		    });
 	}
 }
@@ -86,13 +93,12 @@ static void regexp_replace_function(DataChunk &args, ExpressionState &state, Vec
 	RE2::Options options;
 	options.set_log_errors(false);
 
-	VectorOperations::TernaryExec<const char *, const char *, const char *, const char *>(
-	    strings, patterns, replaces, result,
-	    [&](const char *string, const char *pattern, const char *replace, index_t result_index) {
-		    RE2 re(pattern, options);
-		    std::string sstring(string);
-		    RE2::Replace(&sstring, re, replace);
-		    return result.string_heap.AddString(sstring);
+	TernaryExecutor::Execute<string_t, string_t, string_t, string_t, true>(
+	    strings, patterns, replaces, result, [&](string_t input, string_t pattern, string_t replace) {
+		    RE2 re(CreateStringPiece(pattern), options);
+		    std::string sstring(input.GetData(), input.GetSize());
+		    RE2::Replace(&sstring, re, CreateStringPiece(replace));
+		    return result.AddString(sstring);
 	    });
 }
 

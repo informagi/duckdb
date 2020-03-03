@@ -5,7 +5,6 @@
 #include "duckdb/parser/expression/window_expression.hpp"
 #include "duckdb/parser/transformer.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/main/client_context.hpp"
 
 using namespace duckdb;
 using namespace std;
@@ -106,7 +105,17 @@ unique_ptr<ParsedExpression> Transformer::TransformFuncCall(PGFuncCall *root) {
 
 	auto lowercase_name = StringUtil::Lower(function_name);
 
+	if (root->agg_filter) {
+		throw ParserException("FILTER is not implemented for aggregates");
+	}
+	if (root->agg_order) {
+		throw ParserException("ORDER BY is not implemented for aggregates");
+	}
+
 	if (root->over) {
+		if (root->agg_distinct) {
+			throw ParserException("DISTINCT is not implemented for window functions!");
+		}
 
 		auto win_fun_type = WindowToExpressionType(lowercase_name);
 		if (win_fun_type == ExpressionType::INVALID) {
@@ -141,7 +150,6 @@ unique_ptr<ParsedExpression> Transformer::TransformFuncCall(PGFuncCall *root) {
 			}
 		}
 		auto window_spec = reinterpret_cast<PGWindowDef *>(root->over);
-
 		if (window_spec->name) {
 			auto it = window_clauses.find(StringUtil::Lower(string(window_spec->name)));
 			if (it == window_clauses.end()) {

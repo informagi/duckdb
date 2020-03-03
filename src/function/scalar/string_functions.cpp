@@ -5,10 +5,10 @@ using namespace std;
 namespace duckdb {
 
 void BuiltinFunctions::RegisterStringFunctions() {
+	Register<ReverseFun>();
 	Register<LowerFun>();
 	Register<UpperFun>();
 	Register<ConcatFun>();
-	Register<ConcatWSFun>();
 	Register<LengthFun>();
 	Register<LikeFun>();
 	Register<RegexpFun>();

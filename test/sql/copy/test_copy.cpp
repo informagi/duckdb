@@ -182,7 +182,7 @@ TEST_CASE("Test copy statement", "[copy]") {
 
 	// 1024 rows (vector size)
 	ofstream csv_vector_size(fs.JoinPath(csv_path, "vsize.csv"));
-	for (int i = 0; i < 1024; i++) {
+	for (int i = 0; i < STANDARD_VECTOR_SIZE; i++) {
 		csv_vector_size << i << "," << i << ", test" << endl;
 	}
 	csv_vector_size.close();
@@ -190,7 +190,7 @@ TEST_CASE("Test copy statement", "[copy]") {
 	// load CSV file into a table
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE vsize (a INTEGER, b INTEGER, c VARCHAR(10));"));
 	result = con.Query("COPY vsize FROM '" + fs.JoinPath(csv_path, "vsize.csv") + "';");
-	REQUIRE(CHECK_COLUMN(result, 0, {1024}));
+	REQUIRE(CHECK_COLUMN(result, 0, {STANDARD_VECTOR_SIZE}));
 }
 
 TEST_CASE("Test CSV file without trailing newline", "[copy]") {
@@ -1159,7 +1159,7 @@ TEST_CASE("Test copy statement with many empty lines", "[copy]") {
 	// generate CSV file with a very long string
 	ofstream from_csv_file(fs.JoinPath(csv_path, "test.csv"));
 	from_csv_file << "1\n";
-	for (index_t i = 0; i < 19999; i++) {
+	for (idx_t i = 0; i < 19999; i++) {
 		from_csv_file << "\n";
 	}
 	from_csv_file.close();
@@ -1213,12 +1213,12 @@ TEST_CASE("Test Windows Newlines with a long file", "[copy]") {
 
 	auto csv_path = GetCSVPath();
 
-	index_t line_count = 20000;
+	idx_t line_count = 20000;
 	int64_t sum_a = 0, sum_c = 0;
 
 	// generate a CSV file with many strings
 	ofstream from_csv_file(fs.JoinPath(csv_path, "test.csv"));
-	for (index_t i = 0; i < line_count; i++) {
+	for (idx_t i = 0; i < line_count; i++) {
 		from_csv_file << i << ","
 		              << "hello"
 		              << "," << i + 2 << "\r\n";
@@ -1257,7 +1257,7 @@ TEST_CASE("Test Windows Newlines with a long file", "[copy]") {
 	// generate a csv file with one value and many empty values
 	ofstream from_csv_file_empty(fs.JoinPath(csv_path, "test2.csv"));
 	from_csv_file_empty << 1 << "\r\n";
-	for (index_t i = 0; i < line_count - 1; i++) {
+	for (idx_t i = 0; i < line_count - 1; i++) {
 		from_csv_file_empty << "\r\n";
 	}
 	from_csv_file_empty.close();

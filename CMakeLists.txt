@@ -21,6 +21,11 @@ set(CMAKE_VERBOSE_MAKEFILE OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_MACOSX_RPATH 1)
 
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+endif()
+
 # Determine install paths
 set(INSTALL_LIB_DIR lib CACHE PATH "Installation directory for libraries")
 set(INSTALL_BIN_DIR bin CACHE PATH "Installation directory for executables")
@@ -72,6 +77,13 @@ endif()
 option(EXPLICIT_EXCEPTIONS "Explicitly enable C++ exceptions." FALSE)
 if(${EXPLICIT_EXCEPTIONS})
   set(CXX_EXTRA "${CXX_EXTRA} -fexceptions")
+endif()
+
+SET(SUN FALSE)
+if(${CMAKE_SYSTEM_NAME} STREQUAL "SunOS")
+  set(CXX_EXTRA "${CXX_EXTRA} -mimpure-text")
+  add_definitions(-DSUN=1)
+  SET(SUN TRUE)
 endif()
 
 execute_process(COMMAND git
@@ -208,13 +220,10 @@ endfunction()
 
 add_subdirectory(src)
 add_subdirectory(third_party)
-
-if(NOT LEAN)
-  add_subdirectory(test)
-  add_subdirectory(tools)
-  if(NOT WIN32)
-    add_subdirectory(benchmark)
-  endif()
+add_subdirectory(test)
+add_subdirectory(tools)
+if(NOT WIN32 AND NOT SUN)
+  add_subdirectory(benchmark)
 endif()
 
 # Write the export set for build and install tree

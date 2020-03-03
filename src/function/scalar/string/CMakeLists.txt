@@ -1,8 +1,8 @@
 add_library_unity(duckdb_func_string
                   OBJECT
+		  reverse.cpp
                   caseconvert.cpp
                   concat.cpp
-                  concat_ws.cpp
                   length.cpp
                   like.cpp
                   regexp.cpp
