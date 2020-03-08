@@ -34,8 +34,8 @@ void CommitState::WriteCatalogEntry(CatalogEntry *entry, data_ptr_t dataptr) {
 		}
 		if (entry->type == CatalogType::TABLE) {
 			// ALTER TABLE statement, read the extra data after the entry
-			auto extra_data_size = *((index_t *)dataptr);
-			auto extra_data = (data_ptr_t)(dataptr + sizeof(index_t));
+			auto extra_data_size = *((idx_t *)dataptr);
+			auto extra_data = (data_ptr_t)(dataptr + sizeof(idx_t));
 			// deserialize it
 			BufferedDeserializer source(extra_data, extra_data_size);
 			auto info = AlterInfo::Deserialize(source);
@@ -95,10 +95,10 @@ void CommitState::WriteDelete(DeleteInfo *info) {
 		delete_chunk->Initialize(delete_types);
 	}
 	auto rows = (row_t *)delete_chunk->data[0].GetData();
-	for (index_t i = 0; i < info->count; i++) {
+	for (idx_t i = 0; i < info->count; i++) {
 		rows[i] = info->base_row + info->rows[i];
 	}
-	delete_chunk->data[0].count = info->count;
+	delete_chunk->SetCardinality(info->count);
 	log->WriteDelete(*delete_chunk);
 }
 
@@ -117,19 +117,14 @@ void CommitState::WriteUpdate(UpdateInfo *info) {
 	ColumnScanState state;
 	info->segment->InitializeScan(state);
 	info->segment->Fetch(state, info->vector_index, update_chunk->data[0]);
-	update_chunk->data[0].sel_vector = info->tuples;
-	update_chunk->data[0].count = info->N;
 
 	// write the row ids into the chunk
 	auto row_ids = (row_t *)update_chunk->data[1].GetData();
-	index_t start = info->segment->row_start + info->vector_index * STANDARD_VECTOR_SIZE;
-	for (index_t i = 0; i < info->N; i++) {
+	idx_t start = info->segment->row_start + info->vector_index * STANDARD_VECTOR_SIZE;
+	for (idx_t i = 0; i < info->N; i++) {
 		row_ids[info->tuples[i]] = start + info->tuples[i];
 	}
-	update_chunk->data[1].sel_vector = info->tuples;
-	update_chunk->data[1].count = info->N;
-
-	update_chunk->sel_vector = info->tuples;
+	update_chunk->SetCardinality(info->N, info->tuples);
 
 	log->WriteUpdate(*update_chunk, info->column_data->column_idx);
 }

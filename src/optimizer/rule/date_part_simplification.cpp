@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
+#include "duckdb/optimizer/expression_rewriter.hpp"
 #include "duckdb/common/enums/date_part_specifier.hpp"
 #include "duckdb/function/function.hpp"
 
@@ -48,7 +49,7 @@ unique_ptr<Expression> DatePartSimplificationRule::Apply(LogicalOperator &op, ve
 	case DatePartSpecifier::CENTURY:
 		new_function_name = "century";
 		break;
-	case DatePartSpecifier::MILLENIUM:
+	case DatePartSpecifier::MILLENNIUM:
 		new_function_name = "millenium";
 		break;
 	case DatePartSpecifier::QUARTER:

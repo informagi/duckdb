@@ -2,9 +2,6 @@
 
 #include <ctype.h>
 #include <duckdb.hpp>
-#ifndef _WIN32
-#include <err.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,7 +65,7 @@ void sqlite3_randomness(int N, void *pBuf) {
 int sqlite3_open(const char *filename, /* Database filename (UTF-8) */
                  sqlite3 **ppDb        /* OUT: SQLite db handle */
 ) {
-	if (strcmp(filename, ":memory:") == 0) {
+	if (filename && strcmp(filename, ":memory:") == 0) {
 		filename = NULL;
 	}
 	*ppDb = nullptr;
@@ -153,7 +150,7 @@ int sqlite3_prepare_v2(sqlite3 *db,           /* Database handle */
 		stmt->query_string = query;
 		stmt->prepared = move(prepared);
 		stmt->current_row = -1;
-		for (index_t i = 0; i < stmt->prepared->n_param; i++) {
+		for (idx_t i = 0; i < stmt->prepared->n_param; i++) {
 			stmt->bound_names.push_back("$" + to_string(i + 1));
 			stmt->bound_values.push_back(Value());
 		}
@@ -475,7 +472,7 @@ int sqlite3_bind_parameter_index(sqlite3_stmt *stmt, const char *zName) {
 	if (!stmt || !zName) {
 		return 0;
 	}
-	for (index_t i = 0; i < stmt->bound_names.size(); i++) {
+	for (idx_t i = 0; i < stmt->bound_names.size(); i++) {
 		if (stmt->bound_names[i] == string(zName)) {
 			return i + 1;
 		}
@@ -646,6 +643,9 @@ int sqlite3_config(int i, ...) {
 }
 
 int sqlite3_errcode(sqlite3 *db) {
+	if (!db) {
+		return SQLITE_MISUSE;
+	}
 	return db->last_error.empty() ? SQLITE_OK : SQLITE_ERROR;
 }
 
@@ -654,11 +654,16 @@ int sqlite3_extended_errcode(sqlite3 *db) {
 }
 
 const char *sqlite3_errmsg(sqlite3 *db) {
+	if (!db) {
+		return "";
+	}
 	return db->last_error.c_str();
 }
 
 void sqlite3_interrupt(sqlite3 *db) {
-	db->con->Interrupt();
+	if (db) {
+		db->con->Interrupt();
+	}
 }
 
 const char *sqlite3_libversion(void) {

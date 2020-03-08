@@ -12,8 +12,9 @@ using namespace std;
 
 template <class SRC, class OP> static void string_cast(Vector &source, Vector &result) {
 	assert(result.type == TypeId::VARCHAR);
-	UnaryExecutor::Execute<SRC, const char *, true>(
-	    source, result, [&](SRC input) { return result.AddString(OP::template Operation<SRC, string>(input)); });
+	UnaryExecutor::Execute<SRC, string_t, true>(source, result, [&](SRC input) {
+		return OP::template Operation<SRC>(input, result);
+	});
 }
 
 static NotImplementedException UnimplementedCast(SQLType source_type, SQLType target_type) {
@@ -35,8 +36,6 @@ static void null_cast(Vector &source, Vector &result, SQLType source_type, SQLTy
 	}
 	result.vector_type = source.vector_type;
 	result.nullmask = source.nullmask;
-	result.sel_vector = source.sel_vector;
-	result.count = source.count;
 }
 
 template <class SRC>
@@ -73,7 +72,7 @@ static void numeric_cast_switch(Vector &source, Vector &result, SQLType source_t
 		UnaryExecutor::Execute<SRC, double, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::VARCHAR: {
-		string_cast<SRC, duckdb::Cast>(source, result);
+		string_cast<SRC, duckdb::StringCast>(source, result);
 		break;
 	}
 	default:
@@ -87,44 +86,44 @@ static void string_cast_switch(Vector &source, Vector &result, SQLType source_ty
 	switch (target_type.id) {
 	case SQLTypeId::BOOLEAN:
 		assert(result.type == TypeId::BOOL);
-		UnaryExecutor::Execute<const char *, bool, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, bool, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::TINYINT:
 		assert(result.type == TypeId::INT8);
-		UnaryExecutor::Execute<const char *, int8_t, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, int8_t, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::SMALLINT:
 		assert(result.type == TypeId::INT16);
-		UnaryExecutor::Execute<const char *, int16_t, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, int16_t, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::INTEGER:
 		assert(result.type == TypeId::INT32);
-		UnaryExecutor::Execute<const char *, int32_t, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, int32_t, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::BIGINT:
 		assert(result.type == TypeId::INT64);
-		UnaryExecutor::Execute<const char *, int64_t, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, int64_t, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::FLOAT:
 		assert(result.type == TypeId::FLOAT);
-		UnaryExecutor::Execute<const char *, float, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, float, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::DECIMAL:
 	case SQLTypeId::DOUBLE:
 		assert(result.type == TypeId::DOUBLE);
-		UnaryExecutor::Execute<const char *, double, duckdb::Cast, true>(source, result);
+		UnaryExecutor::Execute<string_t, double, duckdb::Cast, true>(source, result);
 		break;
 	case SQLTypeId::DATE:
 		assert(result.type == TypeId::INT32);
-		UnaryExecutor::Execute<const char *, date_t, duckdb::CastToDate, true>(source, result);
+		UnaryExecutor::Execute<string_t, date_t, duckdb::CastToDate, true>(source, result);
 		break;
 	case SQLTypeId::TIME:
 		assert(result.type == TypeId::INT32);
-		UnaryExecutor::Execute<const char *, dtime_t, duckdb::CastToTime, true>(source, result);
+		UnaryExecutor::Execute<string_t, dtime_t, duckdb::CastToTime, true>(source, result);
 		break;
 	case SQLTypeId::TIMESTAMP:
 		assert(result.type == TypeId::INT64);
-		UnaryExecutor::Execute<const char *, timestamp_t, duckdb::CastToTimestamp, true>(source, result);
+		UnaryExecutor::Execute<string_t, timestamp_t, duckdb::CastToTimestamp, true>(source, result);
 		break;
 	default:
 		null_cast(source, result, source_type, target_type);
@@ -237,8 +236,6 @@ void VectorOperations::Cast(Vector &source, Vector &result, SQLType source_type,
 		// cast a NULL to another type, just copy the properties and change the type
 		result.vector_type = source.vector_type;
 		result.nullmask = source.nullmask;
-		result.sel_vector = source.sel_vector;
-		result.count = source.count;
 		break;
 	}
 	default:

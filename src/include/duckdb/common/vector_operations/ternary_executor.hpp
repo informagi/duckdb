@@ -20,7 +20,7 @@ private:
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TYPE, class FUN, bool IGNORE_NULL, bool A_CONSTANT,
 	          bool B_CONSTANT, bool C_CONSTANT>
 	static inline void ExecuteLoop(A_TYPE *__restrict adata, B_TYPE *__restrict bdata, C_TYPE *__restrict cdata,
-	                               RESULT_TYPE *__restrict result_data, index_t count, sel_t *__restrict sel_vector,
+	                               RESULT_TYPE *__restrict result_data, idx_t count, sel_t *__restrict sel_vector,
 	                               nullmask_t &nullmask, FUN fun) {
 		if (!A_CONSTANT) {
 			ASSERT_RESTRICT(adata, adata + count, result_data, result_data + count);
@@ -32,14 +32,14 @@ private:
 			ASSERT_RESTRICT(cdata, cdata + count, result_data, result_data + count);
 		}
 		if (IGNORE_NULL && nullmask.any()) {
-			VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
+			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
 				if (!nullmask[i]) {
 					result_data[i] =
 					    fun(adata[A_CONSTANT ? 0 : i], bdata[B_CONSTANT ? 0 : i], cdata[C_CONSTANT ? 0 : i]);
 				}
 			});
 		} else {
-			VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
+			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
 				result_data[i] = fun(adata[A_CONSTANT ? 0 : i], bdata[B_CONSTANT ? 0 : i], cdata[C_CONSTANT ? 0 : i]);
 			});
 		}
@@ -132,17 +132,14 @@ private:
 
 		// finally we perform the actual loop over the data operation
 		ExecuteLoop<A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE, FUN, IGNORE_NULL, A_CONSTANT, B_CONSTANT, C_CONSTANT>(
-		    adata, bdata, cdata, result_data, result.count, result.sel_vector, result.nullmask, fun);
+		    adata, bdata, cdata, result_data, result.size(), result.sel_vector(), result.nullmask, fun);
 	}
 
 public:
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TYPE, bool IGNORE_NULL = false,
 	          class FUN = std::function<RESULT_TYPE(A_TYPE, B_TYPE, C_TYPE)>>
 	static void Execute(Vector &a, Vector &b, Vector &c, Vector &result, FUN fun) {
-		assert(a.count == b.count && a.count == c.count && a.sel_vector == b.sel_vector &&
-		       a.sel_vector == c.sel_vector);
-		result.sel_vector = a.sel_vector;
-		result.count = a.count;
+		assert(a.SameCardinality(b) && a.SameCardinality(c) && a.SameCardinality(result));
 		if (a.vector_type == VectorType::CONSTANT_VECTOR) {
 			ExecuteA<A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE, FUN, IGNORE_NULL, true>(a, b, c, result, fun);
 		} else {
@@ -153,19 +150,19 @@ public:
 
 private:
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class OP, bool A_CONSTANT, bool B_CONSTANT, bool C_CONSTANT>
-	static inline index_t SelectLoop(A_TYPE *__restrict adata, B_TYPE *__restrict bdata, C_TYPE *__restrict cdata,
-	                                 sel_t *__restrict result, index_t count, sel_t *__restrict sel_vector,
-	                                 nullmask_t &nullmask) {
-		index_t result_count = 0;
+	static inline idx_t SelectLoop(A_TYPE *__restrict adata, B_TYPE *__restrict bdata, C_TYPE *__restrict cdata,
+	                               sel_t *__restrict result, idx_t count, sel_t *__restrict sel_vector,
+	                               nullmask_t &nullmask) {
+		idx_t result_count = 0;
 		if (nullmask.any()) {
-			VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
+			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
 				if (!nullmask[i] &&
 				    OP::Operation(adata[A_CONSTANT ? 0 : i], bdata[B_CONSTANT ? 0 : i], cdata[C_CONSTANT ? 0 : i])) {
 					result[result_count++] = i;
 				}
 			});
 		} else {
-			VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
+			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
 				if (OP::Operation(adata[A_CONSTANT ? 0 : i], bdata[B_CONSTANT ? 0 : i], cdata[C_CONSTANT ? 0 : i])) {
 					result[result_count++] = i;
 				}
@@ -175,7 +172,7 @@ private:
 	}
 
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class OP, bool A_CONSTANT>
-	static inline index_t SelectA(Vector &a, Vector &b, Vector &c, sel_t result[]) {
+	static inline idx_t SelectA(Vector &a, Vector &b, Vector &c, sel_t result[]) {
 		if (b.vector_type == VectorType::CONSTANT_VECTOR) {
 			if (b.nullmask[0]) {
 				return 0;
@@ -188,7 +185,7 @@ private:
 	}
 
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class OP, bool A_CONSTANT, bool B_CONSTANT>
-	static inline index_t SelectAB(Vector &a, Vector &b, Vector &c, sel_t result[]) {
+	static inline idx_t SelectAB(Vector &a, Vector &b, Vector &c, sel_t result[]) {
 		if (c.vector_type == VectorType::CONSTANT_VECTOR) {
 			if (c.nullmask[0]) {
 				return 0;
@@ -201,7 +198,7 @@ private:
 	}
 
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class OP, bool A_CONSTANT, bool B_CONSTANT, bool C_CONSTANT>
-	static inline index_t SelectABC(Vector &a, Vector &b, Vector &c, sel_t result[]) {
+	static inline idx_t SelectABC(Vector &a, Vector &b, Vector &c, sel_t result[]) {
 		auto adata = (A_TYPE *)a.GetData();
 		auto bdata = (B_TYPE *)b.GetData();
 		auto cdata = (C_TYPE *)c.GetData();
@@ -211,7 +208,7 @@ private:
 			// everything is constant, perform the operation once on all the counts and return all rows or zero rows
 			// based on that
 			if (OP::Operation(adata[0], bdata[0], cdata[0])) {
-				return a.count;
+				return a.size();
 			} else {
 				return 0;
 			}
@@ -223,14 +220,13 @@ private:
 
 		// finally perform the select loop to get the count and the final result
 		return SelectLoop<A_TYPE, B_TYPE, C_TYPE, OP, A_CONSTANT, B_CONSTANT, C_CONSTANT>(
-		    adata, bdata, cdata, result, a.count, a.sel_vector, nullmask);
+		    adata, bdata, cdata, result, a.size(), a.sel_vector(), nullmask);
 	}
 
 public:
 	template <class A_TYPE, class B_TYPE, class C_TYPE, class OP>
-	static index_t Select(Vector &a, Vector &b, Vector &c, sel_t result[]) {
-		assert(a.count == b.count && a.count == c.count && a.sel_vector == b.sel_vector &&
-		       a.sel_vector == c.sel_vector);
+	static idx_t Select(Vector &a, Vector &b, Vector &c, sel_t result[]) {
+		assert(a.SameCardinality(b) && a.SameCardinality(c));
 		if (a.vector_type == VectorType::CONSTANT_VECTOR) {
 			if (a.nullmask[0]) {
 				return 0;

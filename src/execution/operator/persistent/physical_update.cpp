@@ -3,7 +3,6 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/storage/data_table.hpp"
 
@@ -33,13 +32,14 @@ void PhysicalUpdate::GetChunkInternal(ClientContext &context, DataChunk &chunk, 
 		if (state->child_chunk.size() == 0) {
 			break;
 		}
-		state->child_chunk.Flatten();
+		state->child_chunk.ClearSelectionVector();
 		default_executor.SetChunk(state->child_chunk);
 
 		// update data in the base table
 		// the row ids are given to us as the last column of the child chunk
-		auto &row_ids = state->child_chunk.data[state->child_chunk.column_count - 1];
-		for (index_t i = 0; i < expressions.size(); i++) {
+		auto &row_ids = state->child_chunk.data[state->child_chunk.column_count() - 1];
+		update_chunk.SetCardinality(state->child_chunk);
+		for (idx_t i = 0; i < expressions.size(); i++) {
 			if (expressions[i]->type == ExpressionType::VALUE_DEFAULT) {
 				// default expression, set to the default value of the column
 				default_executor.ExecuteExpression(columns[i], update_chunk.data[i]);
@@ -50,12 +50,12 @@ void PhysicalUpdate::GetChunkInternal(ClientContext &context, DataChunk &chunk, 
 				update_chunk.data[i].Reference(state->child_chunk.data[binding.index]);
 			}
 		}
-		update_chunk.sel_vector = state->child_chunk.sel_vector;
 
 		if (is_index_update) {
 			// index update, perform a delete and an append instead
 			table.Delete(tableref, context, row_ids);
-			for (index_t i = 0; i < columns.size(); i++) {
+			mock_chunk.SetCardinality(update_chunk);
+			for (idx_t i = 0; i < columns.size(); i++) {
 				mock_chunk.data[columns[i]].Reference(update_chunk.data[i]);
 			}
 			table.Append(tableref, context, mock_chunk);
@@ -65,8 +65,8 @@ void PhysicalUpdate::GetChunkInternal(ClientContext &context, DataChunk &chunk, 
 		updated_count += state->child_chunk.size();
 	}
 
-	chunk.data[0].count = 1;
-	chunk.data[0].SetValue(0, Value::BIGINT(updated_count));
+	chunk.SetCardinality(1);
+	chunk.SetValue(0, 0, Value::BIGINT(updated_count));
 
 	state->finished = true;
 

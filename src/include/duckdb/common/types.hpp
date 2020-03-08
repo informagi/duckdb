@@ -20,16 +20,20 @@ class Deserializer;
 
 struct blob_t {
 	data_ptr_t data;
-	index_t size;
+	idx_t size;
 };
 
-struct string_t {
-	string_t() = default;
-	string_t(char *data, uint32_t length) : data(data), length(length) {
+struct string_t;
+
+template <class T> using child_list_t = std::vector<std::pair<std::string, T>>;
+
+struct list_entry_t {
+	list_entry_t() = default;
+	list_entry_t(uint64_t offset, uint64_t length) : offset(offset), length(length) {
 	}
 
-	char *data;
-	uint32_t length;
+	uint64_t offset;
+	uint64_t length;
 };
 
 //===--------------------------------------------------------------------===//
@@ -179,13 +183,19 @@ enum class SQLTypeId : uint8_t {
 	DECIMAL = 20,
 	CHAR = 21,
 	VARCHAR = 22,
-	VARBINARY = 23
+	VARBINARY = 23,
+
+	STRUCT = 100,
+	LIST = 101
 };
 
 struct SQLType {
 	SQLTypeId id;
 	uint16_t width;
 	uint8_t scale;
+
+	// TODO serialize this
+	child_list_t<SQLType> child_type;
 
 	SQLType(SQLTypeId id = SQLTypeId::INVALID, uint16_t width = 0, uint8_t scale = 0)
 	    : id(id), width(width), scale(scale) {
@@ -219,6 +229,9 @@ public:
 	static const SQLType TIMESTAMP;
 	static const SQLType TIME;
 	static const SQLType VARCHAR;
+	static const SQLType STRUCT;
+	static const SQLType LIST;
+	static const SQLType ANY;
 
 	//! A list of all NUMERIC types (integral and floating point types)
 	static const vector<SQLType> NUMERIC;
@@ -232,6 +245,7 @@ string SQLTypeIdToString(SQLTypeId type);
 string SQLTypeToString(SQLType type);
 
 SQLType MaxSQLType(SQLType left, SQLType right);
+SQLType TransformStringToSQLType(string str);
 
 //! Gets the internal type associated with the given SQL type
 TypeId GetInternalType(SQLType type);
@@ -271,7 +285,7 @@ template <class T> bool IsValidType() {
 extern const TypeId ROW_TYPE;
 
 string TypeIdToString(TypeId type);
-index_t GetTypeIdSize(TypeId type);
+idx_t GetTypeIdSize(TypeId type);
 bool TypeIsConstantSize(TypeId type);
 bool TypeIsIntegral(TypeId type);
 bool TypeIsNumeric(TypeId type);

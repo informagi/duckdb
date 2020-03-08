@@ -1,10 +1,18 @@
+import os
 
 GENERATED_HEADER = 'include/tpce_generated.hpp'
 GENERATED_SOURCE = 'tpce_generated.cpp'
+TPCE_DIR = os.path.join('third_party', 'tpce-tool')
+
+GENERATED_HEADER = os.path.join(TPCE_DIR, GENERATED_HEADER)
+GENERATED_SOURCE = os.path.join(TPCE_DIR, GENERATED_SOURCE)
 
 current_table = None
 
 tables = {}
+
+print(GENERATED_HEADER)
+print(GENERATED_SOURCE)
 
 header = open(GENERATED_HEADER, 'w+')
 source = open(GENERATED_SOURCE, 'w+')
@@ -21,7 +29,6 @@ for fp in [header, source]:
 
 header.write("""
 #include "duckdb/catalog/catalog.hpp"
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/data_table.hpp"
@@ -102,32 +109,32 @@ struct tpce_append_information {
 
 static void append_value(DataChunk & chunk, size_t index,
                          size_t & column, int32_t value) {
-	((int32_t *)chunk.data[column++].data)[index] = value;
+	((int32_t *)chunk.data[column++].GetData())[index] = value;
 }
 
 static void append_bigint(DataChunk & chunk, size_t index,
                           size_t & column, int64_t value) {
-	((int64_t *)chunk.data[column++].data)[index] = value;
+	((int64_t *)chunk.data[column++].GetData())[index] = value;
 }
 
 static void append_string(DataChunk & chunk, size_t index,
                           size_t & column, const char *value) {
-	chunk.data[column++].SetStringValue(index, value);
+	chunk.data[column++].SetValue(index, Value(value));
 }
 
 static void append_double(DataChunk & chunk, size_t index,
                           size_t & column, double value) {
-	((double *)chunk.data[column++].data)[index] = value;
+	((double *)chunk.data[column++].GetData())[index] = value;
 }
 
 static void append_bool(DataChunk & chunk, size_t index,
                         size_t & column, bool value) {
-	((bool *)chunk.data[column++].data)[index] = value;
+	((bool *)chunk.data[column++].GetData())[index] = value;
 }
 
 static void append_timestamp(DataChunk & chunk, size_t index,
                              size_t & column, CDateTime time) {
-	((timestamp_t *)chunk.data[column++].data)[index] =
+	((timestamp_t *)chunk.data[column++].GetData())[index] =
 	    0; // Timestamp::FromString(time.ToStr(1));
 }
 
@@ -142,7 +149,7 @@ void append_char(DataChunk & chunk, size_t index, size_t & column,
 static void append_to_append_info(tpce_append_information & info) {
 	auto &chunk = info.chunk;
 	auto &table = info.table;
-	if (chunk.column_count == 0) {
+	if (chunk.column_count() == 0) {
 		// initalize the chunk
 		auto types = table->GetTypes();
 		chunk.Initialize(types);
@@ -152,9 +159,7 @@ static void append_to_append_info(tpce_append_information & info) {
 		// have to reset the chunk
 		chunk.Reset();
 	}
-	for (size_t i = 0; i < chunk.column_count; i++) {
-		chunk.data[i].count++;
-	}
+	chunk.SetCardinality(chunk.size() + 1);
 }
 
 template <typename T> class DuckDBBaseLoader : public CBaseLoader<T> {
@@ -176,7 +181,7 @@ template <typename T> class DuckDBBaseLoader : public CBaseLoader<T> {
 
 """)
 
-with open('include/main/TableRows.h', 'r') as f:
+with open(os.path.join(TPCE_DIR, 'include/main/TableRows.h'), 'r') as f:
 	for line in f:
 		line = line.strip()
 		if line.startswith('typedef struct '):
@@ -268,15 +273,14 @@ public:
 	source.write("""
 	}
 
-};
-	""")
+};""")
 
 
 for table in tables.keys():
 	source.write("""
 CBaseLoader<${ROW_TYPE}> *
 DuckDBLoaderFactory::Create${TABLENAME}Loader() {
-	auto table = context->db.catalog->GetTable(*context,
+	auto table = Catalog::GetCatalog(*context).GetEntry<TableCatalogEntry>(*context,
 	                                          schema, "${TABLEINDB}" + suffix);
 	return new DuckDB${TABLENAME}Load(table, context);
 }

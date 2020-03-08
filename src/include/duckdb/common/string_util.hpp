@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include <stdarg.h> // for va_list
 
 namespace duckdb {
 /**
@@ -29,7 +30,7 @@ public:
 	static bool EndsWith(const string &str, const string &suffix);
 
 	//! Repeat a string multiple times
-	static string Repeat(const string &str, const index_t n);
+	static string Repeat(const string &str, const idx_t n);
 
 	//! Split the input string based on newline char
 	static vector<string> Split(const string &str, char delimiter);
@@ -62,7 +63,7 @@ public:
 	static string Prefix(const string &str, const string &prefix);
 
 	//! Return a string that formats the give number of bytes
-	static string FormatSize(index_t bytes);
+	static string FormatSize(idx_t bytes);
 
 	//! Convert a string to uppercase
 	static string Upper(const string &str);

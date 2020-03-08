@@ -1,4 +1,4 @@
-#include "duckdb.hpp"
+#include "duckdb.h"
 
 #include <Rdefines.h>
 #include <algorithm>
@@ -14,7 +14,7 @@ template <class SRC, class DEST>
 static void vector_to_r(Vector &src_vec, void *dest, uint64_t dest_offset, DEST na_val) {
 	auto src_ptr = (SRC *)src_vec.GetData();
 	auto dest_ptr = ((DEST *)dest) + dest_offset;
-	for (size_t row_idx = 0; row_idx < src_vec.count; row_idx++) {
+	for (size_t row_idx = 0; row_idx < src_vec.size(); row_idx++) {
 		dest_ptr[row_idx] = src_vec.nullmask[row_idx] ? na_val : src_ptr[row_idx];
 	}
 }
@@ -72,9 +72,9 @@ struct RBooleanType {
 };
 
 template <class SRC, class DST, class RTYPE>
-static void AppendColumnSegment(SRC *source_data, Vector &result, index_t count) {
+static void AppendColumnSegment(SRC *source_data, Vector &result, idx_t count) {
 	auto result_data = (DST *)result.GetData();
-	for (index_t i = 0; i < count; i++) {
+	for (idx_t i = 0; i < count; i++) {
 		auto val = source_data[i];
 		if (RTYPE::IsNull(val)) {
 			result.nullmask[i] = true;
@@ -84,28 +84,28 @@ static void AppendColumnSegment(SRC *source_data, Vector &result, index_t count)
 	}
 }
 
-static void AppendStringSegment(SEXP coldata, Vector &result, index_t row_idx, index_t count) {
-	auto result_data = (const char **)result.GetData();
-	for (index_t i = 0; i < count; i++) {
+static void AppendStringSegment(SEXP coldata, Vector &result, idx_t row_idx, idx_t count) {
+	auto result_data = (string_t *)result.GetData();
+	for (idx_t i = 0; i < count; i++) {
 		SEXP val = STRING_ELT(coldata, row_idx + i);
 		if (val == NA_STRING) {
 			result.nullmask[i] = true;
 		} else {
-			result_data[i] = CHAR(val);
+			result_data[i] = string_t((char *)CHAR(val));
 		}
 	}
 }
 
-static void AppendFactor(SEXP coldata, Vector &result, index_t row_idx, index_t count) {
+static void AppendFactor(SEXP coldata, Vector &result, idx_t row_idx, idx_t count) {
 	auto source_data = INTEGER_POINTER(coldata) + row_idx;
-	auto result_data = (const char **)result.GetData();
+	auto result_data = (string_t *)result.GetData();
 	SEXP factor_levels = GET_LEVELS(coldata);
-	for (index_t i = 0; i < count; i++) {
+	for (idx_t i = 0; i < count; i++) {
 		int val = source_data[i];
 		if (RIntegerType::IsNull(val)) {
 			result.nullmask[i] = true;
 		} else {
-			result_data[i] = CHAR(STRING_ELT(factor_levels, val - 1));
+			result_data[i] = string_t(CHAR(STRING_ELT(factor_levels, val - 1)));
 		}
 	}
 }
@@ -245,9 +245,9 @@ SEXP duckdb_execute_fetch_R(SEXP stmtsexp) {
 			if (chunk->size() == 0) {
 				break;
 			}
-			assert(chunk->column_count == ncols);
-			assert(chunk->column_count == LENGTH(retlist));
-			for (size_t col_idx = 0; col_idx < chunk->column_count; col_idx++) {
+			assert(chunk->column_count() == ncols);
+			assert(chunk->column_count() == LENGTH(retlist));
+			for (size_t col_idx = 0; col_idx < chunk->column_count(); col_idx++) {
 				SEXP dest = VECTOR_ELT(retlist, col_idx);
 				switch (result->sql_types[col_idx].id) {
 				case SQLTypeId::BOOLEAN:
@@ -268,7 +268,7 @@ SEXP duckdb_execute_fetch_R(SEXP stmtsexp) {
 					auto &src_vec = chunk->data[col_idx];
 					auto src_data = (int64_t *)src_vec.GetData();
 					double *dest_ptr = ((double *)NUMERIC_POINTER(dest)) + dest_offset;
-					for (size_t row_idx = 0; row_idx < src_vec.count; row_idx++) {
+					for (size_t row_idx = 0; row_idx < src_vec.size(); row_idx++) {
 						dest_ptr[row_idx] =
 							src_vec.nullmask[row_idx] ? NA_REAL : (double)Timestamp::GetEpoch(src_data[row_idx]);
 					}
@@ -286,7 +286,7 @@ SEXP duckdb_execute_fetch_R(SEXP stmtsexp) {
 					auto &src_vec = chunk->data[col_idx];
 					auto src_data = (int32_t *)src_vec.GetData();
 					double *dest_ptr = ((double *)NUMERIC_POINTER(dest)) + dest_offset;
-					for (size_t row_idx = 0; row_idx < src_vec.count; row_idx++) {
+					for (size_t row_idx = 0; row_idx < src_vec.size(); row_idx++) {
 						dest_ptr[row_idx] = src_vec.nullmask[row_idx] ? NA_REAL : (double)(src_data[row_idx]) - 719528;
 					}
 
@@ -299,7 +299,7 @@ SEXP duckdb_execute_fetch_R(SEXP stmtsexp) {
 					auto &src_vec = chunk->data[col_idx];
 					auto src_data = (int32_t *)src_vec.GetData();
 					double *dest_ptr = ((double *)NUMERIC_POINTER(dest)) + dest_offset;
-					for (size_t row_idx = 0; row_idx < src_vec.count; row_idx++) {
+					for (size_t row_idx = 0; row_idx < src_vec.size(); row_idx++) {
 
 						if (src_vec.nullmask[row_idx]) {
 							dest_ptr[row_idx] = NA_REAL;
@@ -331,12 +331,12 @@ SEXP duckdb_execute_fetch_R(SEXP stmtsexp) {
 					vector_to_r<double, double>(chunk->data[col_idx], NUMERIC_POINTER(dest), dest_offset, NA_REAL);
 					break;
 				case SQLTypeId::VARCHAR: {
-					for (size_t row_idx = 0; row_idx < chunk->data[col_idx].count; row_idx++) {
-						auto src_ptr = (char **)chunk->data[col_idx].GetData();
+					for (size_t row_idx = 0; row_idx < chunk->data[col_idx].size(); row_idx++) {
+						auto src_ptr = (string_t *)chunk->data[col_idx].GetData();
 						if (chunk->data[col_idx].nullmask[row_idx]) {
 							SET_STRING_ELT(dest, dest_offset + row_idx, NA_STRING);
 						} else {
-							SET_STRING_ELT(dest, dest_offset + row_idx, mkCharCE(src_ptr[row_idx], CE_UTF8));
+							SET_STRING_ELT(dest, dest_offset + row_idx, mkCharCE(src_ptr[row_idx].GetData(), CE_UTF8));
 						}
 					}
 					break;
@@ -473,13 +473,6 @@ SEXP duckdb_append_R(SEXP connsexp, SEXP namesexp, SEXP valuesexp) {
 	if (TYPEOF(namesexp) != STRSXP || LENGTH(namesexp) != 1) {
 		Rf_error("duckdb_append_R: Need single string parameter for name");
 	}
-	auto name = string(CHAR(STRING_ELT(namesexp, 0)));
-
-	// FIXME crude way of stripping quotes, what about escaped quotes?
-	if (name.front() == '"') {
-		name.erase(0, 1);
-		name.erase(name.size() - 1);
-	}
 
 	if (TYPEOF(valuesexp) != VECSXP || LENGTH(valuesexp) < 1 ||
 	    strcmp("data.frame", CHAR(STRING_ELT(GET_CLASS(valuesexp), 0))) != 0) {
@@ -487,12 +480,17 @@ SEXP duckdb_append_R(SEXP connsexp, SEXP namesexp, SEXP valuesexp) {
 	}
 
 	try {
-		Appender appender(*conn, INVALID_SCHEMA, name);
+		auto name = string(CHAR(STRING_ELT(namesexp, 0)));
+		string schema, table;
+		Catalog::ParseRangeVar(name, schema, table);
+
+		Appender appender(*conn, schema, table);
 		auto nrows = LENGTH(VECTOR_ELT(valuesexp, 0));
-		for (index_t row_idx = 0; row_idx < nrows; row_idx += STANDARD_VECTOR_SIZE) {
-			index_t current_count = std::min((index_t)nrows - row_idx, (index_t)STANDARD_VECTOR_SIZE);
-			for (index_t col_idx = 0; col_idx < LENGTH(valuesexp); col_idx++) {
-				auto &append_data = appender.GetAppendVector(col_idx);
+		for (idx_t row_idx = 0; row_idx < nrows; row_idx += STANDARD_VECTOR_SIZE) {
+			idx_t current_count = std::min((idx_t)nrows - row_idx, (idx_t)STANDARD_VECTOR_SIZE);
+			auto &append_chunk = appender.GetAppendChunk();
+			for (idx_t col_idx = 0; col_idx < LENGTH(valuesexp); col_idx++) {
+				auto &append_data = append_chunk.data[col_idx];
 				SEXP coldata = VECTOR_ELT(valuesexp, col_idx);
 				if (TYPEOF(coldata) == REALSXP && TYPEOF(GET_CLASS(coldata)) == STRSXP &&
 				    strcmp("POSIXct", CHAR(STRING_ELT(GET_CLASS(coldata), 0))) == 0) {
@@ -525,8 +523,8 @@ SEXP duckdb_append_R(SEXP connsexp, SEXP namesexp, SEXP valuesexp) {
 				} else {
 					throw;
 				}
-				append_data.count = current_count;
 			}
+			append_chunk.SetCardinality(current_count);
 			appender.Flush();
 		}
 		appender.Close();

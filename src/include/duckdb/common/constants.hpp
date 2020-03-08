@@ -29,20 +29,22 @@ using std::vector;
 #define INVALID_SCHEMA ""
 
 //! The vector size used in the execution engine
+#ifndef STANDARD_VECTOR_SIZE
 #define STANDARD_VECTOR_SIZE 1024
-//! The amount of vectors per storage chunk
-#define STORAGE_CHUNK_VECTORS 10
-//! The storage chunk size
-#define STORAGE_CHUNK_SIZE (STANDARD_VECTOR_SIZE * STORAGE_CHUNK_VECTORS)
+#endif
+
+#if ((STANDARD_VECTOR_SIZE & (STANDARD_VECTOR_SIZE - 1)) != 0)
+#error Vector size should be a power of two
+#endif
 
 //! a saner size_t for loop indices etc
-typedef uint64_t index_t;
+typedef uint64_t idx_t;
 
 //! The type used for row identifiers
 typedef int64_t row_t;
 
 //! The value used to signify an invalid index entry
-extern const index_t INVALID_INDEX;
+extern const idx_t INVALID_INDEX;
 
 //! data pointers
 typedef uint8_t data_t;
@@ -58,10 +60,10 @@ typedef int64_t timestamp_t;
 //! Type used for the selection vector
 typedef uint16_t sel_t;
 //! Type used for transaction timestamps
-typedef index_t transaction_t;
+typedef idx_t transaction_t;
 
 //! Type used for column identifiers
-typedef index_t column_t;
+typedef idx_t column_t;
 //! Special value used to signify the ROW ID of a table
 extern const column_t COLUMN_IDENTIFIER_ROW_ID;
 
@@ -91,5 +93,7 @@ struct Storage {
 	//! to the page size, which is 4KB. (1 << 12)
 	constexpr static int FILE_HEADER_SIZE = 4096;
 };
+
+uint64_t NextPowerOfTwo(uint64_t v);
 
 } // namespace duckdb

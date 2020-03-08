@@ -20,6 +20,9 @@
 using namespace duckdb;
 using namespace std;
 
+Value::Value(string_t val) : Value(string(val.GetData(), val.GetSize())) {
+}
+
 Value Value::MinimumValue(TypeId type) {
 	Value result;
 	result.type = type;
@@ -173,6 +176,13 @@ Value Value::TIMESTAMP(int32_t year, int32_t month, int32_t day, int32_t hour, i
 	return Value::TIMESTAMP(Date::FromDate(year, month, day), Time::FromTime(hour, min, sec, msec));
 }
 
+Value Value::STRUCT(child_list_t<Value> values) {
+	Value result(TypeId::STRUCT);
+	result.struct_value = move(values);
+	result.is_null = false;
+	return result;
+}
+
 //===--------------------------------------------------------------------===//
 // CreateValue
 //===--------------------------------------------------------------------===//
@@ -201,6 +211,10 @@ template <> Value Value::CreateValue(const char *value) {
 }
 
 template <> Value Value::CreateValue(string value) {
+	return Value(value);
+}
+
+template <> Value Value::CreateValue(string_t value) {
 	return Value(value);
 }
 
@@ -235,7 +249,7 @@ template <class T> T Value::GetValueInternal() {
 	case TypeId::DOUBLE:
 		return Cast::Operation<double, T>(value_.double_);
 	case TypeId::VARCHAR:
-		return Cast::Operation<const char *, T>(str_value.c_str());
+		return Cast::Operation<string_t, T>(str_value.c_str());
 	default:
 		throw NotImplementedException("Unimplemented type for GetValue()");
 	}
@@ -324,6 +338,30 @@ string Value::ToString(SQLType sql_type) const {
 		return Timestamp::ToString(value_.bigint);
 	case SQLTypeId::VARCHAR:
 		return str_value;
+	case SQLTypeId::STRUCT: {
+		string ret = "<";
+		for (size_t i = 0; i < struct_value.size(); i++) {
+			auto &child = struct_value[i];
+			ret += child.first + ": " + child.second.ToString();
+			if (i < struct_value.size() - 1) {
+				ret += ", ";
+			}
+		}
+		ret += ">";
+		return ret;
+	}
+	case SQLTypeId::LIST: {
+		string ret = "[";
+		for (size_t i = 0; i < list_value.size(); i++) {
+			auto &child = list_value[i];
+			ret += child.ToString();
+			if (i < list_value.size() - 1) {
+				ret += ", ";
+			}
+		}
+		ret += "]";
+		return ret;
+	}
 	default:
 		throw NotImplementedException("Unimplemented type for printing");
 	}
@@ -419,7 +457,8 @@ Value Value::CastAs(SQLType source_type, SQLType target_type) {
 	if (source_type == target_type) {
 		return Copy();
 	}
-	Vector input, result;
+	VectorCardinality cardinality(1);
+	Vector input(cardinality), result(cardinality);
 	input.Reference(*this);
 	result.Initialize(GetInternalType(target_type));
 	VectorOperations::Cast(input, result, source_type, target_type);
@@ -541,6 +580,10 @@ bool Value::IsUTF8String(const char *s) {
 		return false;
 	}
 	return true;
+}
+
+bool Value::IsUTF8String(string_t s) {
+	return Value::IsUTF8String(s.GetData());
 }
 
 void Value::Print() {

@@ -1,7 +1,6 @@
 #include "duckdb/execution/operator/persistent/physical_delete.hpp"
 
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 using namespace duckdb;
@@ -20,8 +19,8 @@ void PhysicalDelete::GetChunkInternal(ClientContext &context, DataChunk &chunk, 
 		deleted_count += state->child_chunk.size();
 	}
 
-	chunk.data[0].count = 1;
-	chunk.data[0].SetValue(0, Value::BIGINT(deleted_count));
+	chunk.SetCardinality(1);
+	chunk.SetValue(0, 0, Value::BIGINT(deleted_count));
 
 	state->finished = true;
 }

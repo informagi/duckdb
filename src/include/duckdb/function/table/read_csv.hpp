@@ -1,19 +1,19 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// duckdb/common/operator/numeric_inplace_bitwise_operators.hpp
+// duckdb/function/table/read_csv.hpp
 //
 //
 //===----------------------------------------------------------------------===//
 
 #pragma once
 
+#include "duckdb/function/table_function.hpp"
+
 namespace duckdb {
 
-struct BitwiseXORInPlace {
-	template <class T> static inline void Operation(T &left, T right) {
-		left ^= right;
-	}
+struct ReadCSVTableFunction {
+	static void RegisterFunction(BuiltinFunctions &set);
 };
 
 } // namespace duckdb

@@ -31,8 +31,7 @@ struct ExclusiveBetweenOperator {
 	}
 };
 
-template <class OP>
-static index_t between_loop_type_switch(Vector &input, Vector &lower, Vector &upper, sel_t result[]) {
+template <class OP> static idx_t between_loop_type_switch(Vector &input, Vector &lower, Vector &upper, sel_t result[]) {
 	switch (input.type) {
 	case TypeId::BOOL:
 	case TypeId::INT8:
@@ -48,7 +47,7 @@ static index_t between_loop_type_switch(Vector &input, Vector &lower, Vector &up
 	case TypeId::DOUBLE:
 		return TernaryExecutor::Select<double, double, double, OP>(input, lower, upper, result);
 	case TypeId::VARCHAR:
-		return TernaryExecutor::Select<const char *, const char *, const char *, OP>(input, lower, upper, result);
+		return TernaryExecutor::Select<string_t, string_t, string_t, OP>(input, lower, upper, result);
 	default:
 		throw InvalidTypeException(input.type, "Invalid type for BETWEEN");
 	}
@@ -57,21 +56,23 @@ static index_t between_loop_type_switch(Vector &input, Vector &lower, Vector &up
 unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(BoundBetweenExpression &expr,
                                                                 ExpressionExecutorState &root) {
 	auto result = make_unique<ExpressionState>(expr, root);
-	result->AddIntermediates({expr.input.get(), expr.lower.get(), expr.upper.get()});
+	result->AddChild(expr.input.get());
+	result->AddChild(expr.lower.get());
+	result->AddChild(expr.upper.get());
 	return result;
 }
 
 void ExpressionExecutor::Execute(BoundBetweenExpression &expr, ExpressionState *state, Vector &result) {
 	// resolve the children
-	auto &input = state->arguments.data[0];
-	auto &lower = state->arguments.data[1];
-	auto &upper = state->arguments.data[2];
+	Vector input(GetCardinality(), expr.input->return_type);
+	Vector lower(GetCardinality(), expr.lower->return_type);
+	Vector upper(GetCardinality(), expr.upper->return_type);
 	Execute(*expr.input, state->child_states[0].get(), input);
 	Execute(*expr.lower, state->child_states[1].get(), lower);
 	Execute(*expr.upper, state->child_states[2].get(), upper);
 
-	Vector intermediate1(TypeId::BOOL, true, false);
-	Vector intermediate2(TypeId::BOOL, true, false);
+	Vector intermediate1(GetCardinality(), TypeId::BOOL);
+	Vector intermediate2(GetCardinality(), TypeId::BOOL);
 
 	if (expr.upper_inclusive && expr.lower_inclusive) {
 		VectorOperations::GreaterThanEquals(input, lower, intermediate1);
@@ -89,16 +90,16 @@ void ExpressionExecutor::Execute(BoundBetweenExpression &expr, ExpressionState *
 	VectorOperations::And(intermediate1, intermediate2, result);
 }
 
-index_t ExpressionExecutor::Select(BoundBetweenExpression &expr, ExpressionState *state, sel_t result[]) {
+idx_t ExpressionExecutor::Select(BoundBetweenExpression &expr, ExpressionState *state, sel_t result[]) {
 	// resolve the children
-	auto &input = state->arguments.data[0];
-	auto &lower = state->arguments.data[1];
-	auto &upper = state->arguments.data[2];
+	Vector input(GetCardinality(), expr.input->return_type);
+	Vector lower(GetCardinality(), expr.lower->return_type);
+	Vector upper(GetCardinality(), expr.upper->return_type);
 	Execute(*expr.input, state->child_states[0].get(), input);
 	Execute(*expr.lower, state->child_states[1].get(), lower);
 	Execute(*expr.upper, state->child_states[2].get(), upper);
 
-	index_t result_count;
+	idx_t result_count;
 	if (expr.upper_inclusive && expr.lower_inclusive) {
 		result_count = between_loop_type_switch<BothInclusiveBetweenOperator>(input, lower, upper, result);
 	} else if (expr.lower_inclusive) {

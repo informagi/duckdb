@@ -13,14 +13,14 @@ using namespace duckdb;
 using namespace std;
 
 template <class T>
-static inline void set_loop(T *__restrict result_data, T value, index_t count, sel_t *__restrict sel_vector) {
-	VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) { result_data[i] = value; });
+static inline void set_loop(T *__restrict result_data, T value, idx_t count, sel_t *__restrict sel_vector) {
+	VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) { result_data[i] = value; });
 }
 
 template <class T> void templated_set_loop(Vector &result, T value) {
 	auto result_data = (T *)result.GetData();
 
-	set_loop<T>(result_data, value, result.count, result.sel_vector);
+	set_loop<T>(result_data, value, result.size(), result.sel_vector());
 }
 
 //===--------------------------------------------------------------------===//
@@ -65,8 +65,8 @@ void VectorOperations::Set(Vector &result, Value value) {
 			break;
 		case TypeId::VARCHAR: {
 			auto str = result.AddString(value.str_value);
-			auto dataptr = (const char **)result.GetData();
-			VectorOperations::Exec(result.sel_vector, result.count, [&](index_t i, index_t k) { dataptr[i] = str; });
+			auto dataptr = (string_t *)result.GetData();
+			VectorOperations::Exec(result, [&](idx_t i, idx_t k) { dataptr[i] = str; });
 			break;
 		}
 		default:
@@ -90,7 +90,7 @@ template <class T> void templated_fill_nullmask(Vector &v) {
 			// no NULL values, skip
 			return;
 		}
-		VectorOperations::Exec(v, [&](index_t i, index_t k) {
+		VectorOperations::Exec(v, [&](idx_t i, idx_t k) {
 			if (v.nullmask[i]) {
 				data[i] = NullValue<T>();
 			}
@@ -121,7 +121,7 @@ void VectorOperations::FillNullMask(Vector &v) {
 		templated_fill_nullmask<double>(v);
 		break;
 	case TypeId::VARCHAR:
-		templated_fill_nullmask<const char *>(v);
+		templated_fill_nullmask<string_t>(v);
 		break;
 	default:
 		throw NotImplementedException("Type not implemented for null mask");

@@ -3,6 +3,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/types/vector.hpp"
 #include <vector>
 
 using namespace duckdb;
@@ -25,11 +26,11 @@ template <class DST>
 static void TestStringCast(vector<string> &working_values, vector<DST> &expected_values,
                            vector<string> &broken_values) {
 	DST result;
-	for (index_t i = 0; i < working_values.size(); i++) {
+	for (idx_t i = 0; i < working_values.size(); i++) {
 		auto &value = working_values[i];
 		auto expected_value = expected_values[i];
-		REQUIRE_NOTHROW(Cast::Operation<const char *, DST>(value.c_str()) == expected_value);
-		REQUIRE(TryCast::Operation<const char *, DST>(value.c_str(), result));
+		REQUIRE_NOTHROW(Cast::Operation<string_t, DST>(string_t(value)) == expected_value);
+		REQUIRE(TryCast::Operation<string_t, DST>(string_t(value), result));
 		REQUIRE(result == expected_value);
 
 		StringUtil::Trim(value);
@@ -42,8 +43,8 @@ static void TestStringCast(vector<string> &working_values, vector<DST> &expected
 		REQUIRE(Cast::Operation<DST, string>(result) == splits[0]);
 	}
 	for (auto &value : broken_values) {
-		REQUIRE_THROWS(Cast::Operation<const char *, DST>(value.c_str()));
-		REQUIRE(!TryCast::Operation<const char *, DST>(value.c_str(), result));
+		REQUIRE_THROWS(Cast::Operation<string_t, DST>(string_t(value)));
+		REQUIRE(!TryCast::Operation<string_t, DST>(string_t(value), result));
 	}
 }
 
@@ -52,23 +53,23 @@ template <class T> static void TestExponent() {
 	string str;
 	double value = 1;
 	T expected_value = 1;
-	for (index_t exponent = 0; exponent < 100; exponent++) {
+	for (idx_t exponent = 0; exponent < 100; exponent++) {
 		if (value < MaximumValue<T>()) {
 			// expect success
 			str = "1e" + to_string(exponent);
-			REQUIRE(TryCast::Operation<const char *, T>(str.c_str(), parse_result));
+			REQUIRE(TryCast::Operation<string_t, T>(string_t(str), parse_result));
 			REQUIRE(parse_result == expected_value);
 			str = "-1e" + to_string(exponent);
-			REQUIRE(TryCast::Operation<const char *, T>(str.c_str(), parse_result));
+			REQUIRE(TryCast::Operation<string_t, T>(string_t(str), parse_result));
 			REQUIRE(parse_result == -expected_value);
 			value *= 10;
 			expected_value *= 10;
 		} else {
 			// expect failure
 			str = "1e" + to_string(exponent);
-			REQUIRE(!TryCast::Operation<const char *, T>(str.c_str(), parse_result));
+			REQUIRE(!TryCast::Operation<string_t, T>(string_t(str), parse_result));
 			str = "-1e" + to_string(exponent);
-			REQUIRE(!TryCast::Operation<const char *, T>(str.c_str(), parse_result));
+			REQUIRE(!TryCast::Operation<string_t, T>(string_t(str), parse_result));
 		}
 	}
 }
@@ -79,16 +80,16 @@ TEST_CASE("Test casting to boolean", "[cast]") {
 	vector<string> broken_values = {"1", "blabla", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
 
 	bool result;
-	for (index_t i = 0; i < working_values.size(); i++) {
+	for (idx_t i = 0; i < working_values.size(); i++) {
 		auto &value = working_values[i];
 		auto expected_value = expected_values[i];
-		REQUIRE_NOTHROW(Cast::Operation<const char *, bool>(value.c_str()) == expected_value);
-		REQUIRE(TryCast::Operation<const char *, bool>(value.c_str(), result));
+		REQUIRE_NOTHROW(Cast::Operation<string_t, bool>(value) == expected_value);
+		REQUIRE(TryCast::Operation<string_t, bool>(value, result));
 		REQUIRE(result == expected_value);
 	}
 	for (auto &value : broken_values) {
-		REQUIRE_THROWS(Cast::Operation<const char *, bool>(value.c_str()));
-		REQUIRE(!TryCast::Operation<const char *, bool>(value.c_str(), result));
+		REQUIRE_THROWS(Cast::Operation<string_t, bool>(value));
+		REQUIRE(!TryCast::Operation<string_t, bool>(value, result));
 	}
 }
 
@@ -221,16 +222,19 @@ template <class DST>
 static void TestStringCastDouble(vector<string> &working_values, vector<DST> &expected_values,
                                  vector<string> &broken_values) {
 	DST result;
-	for (index_t i = 0; i < working_values.size(); i++) {
+	for (idx_t i = 0; i < working_values.size(); i++) {
 		auto &value = working_values[i];
 		auto expected_value = expected_values[i];
-		REQUIRE_NOTHROW(Cast::Operation<const char *, DST>(value.c_str()) == expected_value);
-		REQUIRE(TryCast::Operation<const char *, DST>(value.c_str(), result));
+		REQUIRE_NOTHROW(Cast::Operation<string_t, DST>(string_t(value)) == expected_value);
+		REQUIRE(TryCast::Operation<string_t, DST>(string_t(value), result));
 		REQUIRE(ApproxEqual(result, expected_value));
+
+		auto to_str_and_back = Cast::Operation<string_t, DST>(string_t(Cast::Operation<DST, string>(expected_value)));
+		REQUIRE(ApproxEqual(to_str_and_back, expected_value));
 	}
 	for (auto &value : broken_values) {
-		REQUIRE_THROWS(Cast::Operation<const char *, DST>(value.c_str()));
-		REQUIRE(!TryCast::Operation<const char *, DST>(value.c_str(), result));
+		REQUIRE_THROWS(Cast::Operation<string_t, DST>(string_t(value)));
+		REQUIRE(!TryCast::Operation<string_t, DST>(string_t(value), result));
 	}
 }
 

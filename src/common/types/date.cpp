@@ -99,7 +99,7 @@ static inline int32_t date_to_number(int32_t year, int32_t month, int32_t day) {
 	return n;
 }
 
-static bool ParseDoubleDigit(const char *buf, index_t &pos, int32_t &result) {
+static bool ParseDoubleDigit(const char *buf, idx_t &pos, int32_t &result) {
 	if (std::isdigit(buf[pos])) {
 		result = buf[pos++] - '0';
 		if (std::isdigit(buf[pos])) {
@@ -113,7 +113,7 @@ static bool ParseDoubleDigit(const char *buf, index_t &pos, int32_t &result) {
 static bool TryConvertDate(const char *buf, date_t &result) {
 	int32_t day = 0, month = -1;
 	int32_t year = 0, yearneg = (buf[0] == '-');
-	index_t pos = 0;
+	idx_t pos = 0;
 	int sep;
 
 	if (yearneg == 0 && !std::isdigit(buf[0])) {
@@ -174,7 +174,11 @@ date_t Date::FromString(string str) {
 string Date::ToString(int32_t date) {
 	int32_t year, month, day;
 	number_to_date(date, year, month, day);
-	return StringUtil::Format("%04d-%02d-%02d", year, month, day);
+	if (year < 0) {
+		return StringUtil::Format("%04d-%02d-%02d (BC)", -year, month, day);
+	} else {
+		return StringUtil::Format("%04d-%02d-%02d", year, month, day);
+	}
 }
 
 string Date::Format(int32_t year, int32_t month, int32_t day) {
@@ -279,4 +283,18 @@ int32_t Date::ExtractWeekNumber(date_t date) {
 	int32_t year, month, day;
 	Date::Convert(date, year, month, day);
 	return GetWeek(year, month - 1, day - 1);
+}
+
+// Returns the date of the monday of the current week.
+date_t Date::GetMondayOfCurrentWeek(date_t date) {
+	int32_t dotw = Date::ExtractISODayOfTheWeek(date);
+
+	int32_t days = date_to_number(Date::ExtractYear(date), Date::ExtractMonth(date), Date::ExtractDay(date));
+
+	days -= dotw - 1;
+
+	int32_t year, month, day;
+	number_to_date(days, year, month, day);
+
+	return (Date::FromDate(year, month, day));
 }

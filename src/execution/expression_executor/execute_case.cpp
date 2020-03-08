@@ -5,20 +5,22 @@
 using namespace duckdb;
 using namespace std;
 
-void Case(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], index_t tcount, sel_t fside[],
-          index_t fcount);
+void Case(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], idx_t tcount, sel_t fside[],
+          idx_t fcount);
 
 unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(BoundCaseExpression &expr,
                                                                 ExpressionExecutorState &root) {
 	auto result = make_unique<ExpressionState>(expr, root);
-	result->AddIntermediates({expr.check.get(), expr.result_if_true.get(), expr.result_if_false.get()});
+	result->AddChild(expr.check.get());
+	result->AddChild(expr.result_if_true.get());
+	result->AddChild(expr.result_if_false.get());
 	return result;
 }
 
 void ExpressionExecutor::Execute(BoundCaseExpression &expr, ExpressionState *state, Vector &result) {
-	auto &check = state->arguments.data[0];
-	auto &res_true = state->arguments.data[1];
-	auto &res_false = state->arguments.data[2];
+	Vector check(GetCardinality(), expr.check->return_type);
+	Vector res_true(GetCardinality(), expr.result_if_true->return_type);
+	Vector res_false(GetCardinality(), expr.result_if_false->return_type);
 
 	auto check_state = state->child_states[0].get();
 	auto res_true_state = state->child_states[1].get();
@@ -40,8 +42,8 @@ void ExpressionExecutor::Execute(BoundCaseExpression &expr, ExpressionState *sta
 		// check is not a constant
 		// first set up the sel vectors for both sides
 		sel_t tside[STANDARD_VECTOR_SIZE], fside[STANDARD_VECTOR_SIZE];
-		index_t tcount = 0, fcount = 0;
-		VectorOperations::Exec(check, [&](index_t i, index_t k) {
+		idx_t tcount = 0, fcount = 0;
+		VectorOperations::Exec(check, [&](idx_t i, idx_t k) {
 			if (!check_data[i] || check.nullmask[i]) {
 				fside[fcount++] = i;
 			} else {
@@ -59,9 +61,6 @@ void ExpressionExecutor::Execute(BoundCaseExpression &expr, ExpressionState *sta
 			Execute(*expr.result_if_true, res_true_state, res_true);
 			Execute(*expr.result_if_false, res_false_state, res_false);
 
-			result.sel_vector = check.sel_vector;
-			result.count = check.count;
-
 			Case(res_true, res_false, result, tside, tcount, fside, fcount);
 		}
 	}
@@ -72,16 +71,16 @@ template <class T> void fill_loop(Vector &vector, Vector &result, sel_t sel[], s
 	auto res = (T *)result.GetData();
 	if (vector.vector_type == VectorType::CONSTANT_VECTOR) {
 		if (vector.nullmask[0]) {
-			for (index_t i = 0; i < count; i++) {
+			for (idx_t i = 0; i < count; i++) {
 				result.nullmask[sel[i]] = true;
 			}
 		} else {
-			for (index_t i = 0; i < count; i++) {
+			for (idx_t i = 0; i < count; i++) {
 				res[sel[i]] = data[0];
 			}
 		}
 	} else {
-		for (index_t i = 0; i < count; i++) {
+		for (idx_t i = 0; i < count; i++) {
 			res[sel[i]] = data[sel[i]];
 			result.nullmask[sel[i]] = vector.nullmask[sel[i]];
 		}
@@ -89,14 +88,14 @@ template <class T> void fill_loop(Vector &vector, Vector &result, sel_t sel[], s
 }
 
 template <class T>
-void case_loop(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], index_t tcount, sel_t fside[],
-               index_t fcount) {
+void case_loop(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], idx_t tcount, sel_t fside[],
+               idx_t fcount) {
 	fill_loop<T>(res_true, result, tside, tcount);
 	fill_loop<T>(res_false, result, fside, fcount);
 }
 
-void Case(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], index_t tcount, sel_t fside[],
-          index_t fcount) {
+void Case(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], idx_t tcount, sel_t fside[],
+          idx_t fcount) {
 	assert(res_true.type == res_false.type && res_true.type == result.type);
 
 	switch (result.type) {
@@ -120,7 +119,7 @@ void Case(Vector &res_true, Vector &res_false, Vector &result, sel_t tside[], in
 		case_loop<double>(res_true, res_false, result, tside, tcount, fside, fcount);
 		break;
 	case TypeId::VARCHAR:
-		case_loop<const char *>(res_true, res_false, result, tside, tcount, fside, fcount);
+		case_loop<string_t>(res_true, res_false, result, tside, tcount, fside, fcount);
 		result.AddHeapReference(res_true);
 		result.AddHeapReference(res_false);
 		break;

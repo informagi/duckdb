@@ -22,7 +22,7 @@ DatePartSpecifier GetDatePartSpecifier(string specifier) {
 	} else if (specifier == "century") {
 		return DatePartSpecifier::CENTURY;
 	} else if (specifier == "millennium") {
-		return DatePartSpecifier::MILLENIUM;
+		return DatePartSpecifier::MILLENNIUM;
 	} else if (specifier == "microseconds") {
 		return DatePartSpecifier::MICROSECONDS;
 	} else if (specifier == "milliseconds") {
@@ -241,7 +241,7 @@ template <class T> static int64_t extract_element(DatePartSpecifier type, T elem
 		return DecadeOperator::Operation<T, int64_t>(element);
 	case DatePartSpecifier::CENTURY:
 		return CenturyOperator::Operation<T, int64_t>(element);
-	case DatePartSpecifier::MILLENIUM:
+	case DatePartSpecifier::MILLENNIUM:
 		return MilleniumOperator::Operation<T, int64_t>(element);
 	case DatePartSpecifier::QUARTER:
 		return QuarterOperator::Operation<T, int64_t>(element);
@@ -272,7 +272,7 @@ template <class T> static int64_t extract_element(DatePartSpecifier type, T elem
 
 struct DatePartOperator {
 	template <class TA, class TB, class TR> static inline TR Operation(TA specifier, TB date) {
-		return extract_element<TB>(GetDatePartSpecifier(specifier), date);
+		return extract_element<TB>(GetDatePartSpecifier(specifier.GetString()), date);
 	}
 };
 
@@ -309,10 +309,10 @@ void DatePartFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet date_part("date_part");
 	date_part.AddFunction(
 	    ScalarFunction({SQLType::VARCHAR, SQLType::DATE}, SQLType::BIGINT,
-	                   ScalarFunction::BinaryFunction<const char *, date_t, int64_t, DatePartOperator, true>));
+	                   ScalarFunction::BinaryFunction<string_t, date_t, int64_t, DatePartOperator, true>));
 	date_part.AddFunction(
 	    ScalarFunction({SQLType::VARCHAR, SQLType::TIMESTAMP}, SQLType::BIGINT,
-	                   ScalarFunction::BinaryFunction<const char *, timestamp_t, int64_t, DatePartOperator, true>));
+	                   ScalarFunction::BinaryFunction<string_t, timestamp_t, int64_t, DatePartOperator, true>));
 	set.AddFunction(date_part);
 	date_part.name = "datepart";
 	set.AddFunction(date_part);

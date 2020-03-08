@@ -7,6 +7,10 @@
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/parser/column_definition.hpp"
 
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/gzip_stream.hpp"
+#include "duckdb/common/string_util.hpp"
+
 #include <algorithm>
 #include <fstream>
 #include <queue>
@@ -27,14 +31,14 @@ TextSearchShiftArray::TextSearchShiftArray(string search_term) : length(search_t
 	shifts = unique_ptr<uint8_t[]>(new uint8_t[length * 255]);
 	memset(shifts.get(), 0, length * 255 * sizeof(uint8_t));
 	// iterate over each of the characters in the array
-	for (index_t main_idx = 0; main_idx < length; main_idx++) {
+	for (idx_t main_idx = 0; main_idx < length; main_idx++) {
 		uint8_t current_char = (uint8_t)search_term[main_idx];
 		// now move over all the remaining positions
-		for (index_t i = main_idx; i < length; i++) {
+		for (idx_t i = main_idx; i < length; i++) {
 			bool is_match = true;
 			// check if the prefix matches at this position
 			// if it does, we move to this position after encountering the current character
-			for (index_t j = 0; j < main_idx; j++) {
+			for (idx_t j = 0; j < main_idx; j++) {
 				if (search_term[i - main_idx + j] != search_term[j]) {
 					is_match = false;
 				}
@@ -47,16 +51,21 @@ TextSearchShiftArray::TextSearchShiftArray(string search_term) : length(search_t
 	}
 }
 
-BufferedCSVReader::BufferedCSVReader(CopyInfo &info, vector<SQLType> sql_types, istream &source)
-    : info(info), sql_types(sql_types), source(source), buffer_size(0), position(0), start(0),
+BufferedCSVReader::BufferedCSVReader(ClientContext &context, CopyInfo &info, vector<SQLType> sql_types)
+    : BufferedCSVReader(info, sql_types, OpenCSV(context, info)) {
+}
+
+BufferedCSVReader::BufferedCSVReader(CopyInfo &info, vector<SQLType> sql_types, unique_ptr<istream> ssource)
+    : info(info), sql_types(sql_types), source(move(ssource)), buffer_size(0), position(0), start(0),
       delimiter_search(info.delimiter), escape_search(info.escape), quote_search(info.quote) {
 	if (info.force_not_null.size() == 0) {
 		info.force_not_null.resize(sql_types.size(), false);
 	}
+
 	assert(info.force_not_null.size() == sql_types.size());
 	// initialize the parse_chunk with a set of VARCHAR types
 	vector<TypeId> varchar_types;
-	for (index_t i = 0; i < sql_types.size(); i++) {
+	for (idx_t i = 0; i < sql_types.size(); i++) {
 		varchar_types.push_back(TypeId::VARCHAR);
 	}
 	parse_chunk.Initialize(varchar_types);
@@ -64,18 +73,34 @@ BufferedCSVReader::BufferedCSVReader(CopyInfo &info, vector<SQLType> sql_types, 
 	if (info.header) {
 		// ignore the first line as a header line
 		string read_line;
-		getline(source, read_line);
+		getline(*source, read_line);
 		linenr++;
 	}
+}
+
+unique_ptr<istream> BufferedCSVReader::OpenCSV(ClientContext &context, CopyInfo &info) {
+	if (!FileSystem::GetFileSystem(context).FileExists(info.file_path)) {
+		throw IOException("File \"%s\" not found", info.file_path.c_str());
+	}
+	unique_ptr<istream> result;
+	// decide based on the extension which stream to use
+	if (StringUtil::EndsWith(StringUtil::Lower(info.file_path), ".gz")) {
+		result = make_unique<GzipStream>(info.file_path);
+	} else {
+		auto csv_local = make_unique<ifstream>();
+		csv_local->open(info.file_path);
+		result = move(csv_local);
+	}
+	return result;
 }
 
 void BufferedCSVReader::ParseComplexCSV(DataChunk &insert_chunk) {
 	// used for parsing algorithm
 	bool finished_chunk = false;
-	index_t column = 0;
-	vector<index_t> escape_positions;
+	idx_t column = 0;
+	vector<idx_t> escape_positions;
 	uint8_t delimiter_pos = 0, escape_pos = 0, quote_pos = 0;
-	index_t offset = 0;
+	idx_t offset = 0;
 
 	// read values into the buffer (if any)
 	if (position >= buffer_size) {
@@ -93,7 +118,7 @@ value_start:
 	delimiter_pos = 0;
 	quote_pos = 0;
 	do {
-		index_t count = 0;
+		idx_t count = 0;
 		for (; position < buffer_size; position++) {
 			quote_search.Match(quote_pos, buffer[position]);
 			delimiter_search.Match(delimiter_pos, buffer[position]);
@@ -207,7 +232,7 @@ unquote:
 		goto add_row;
 	}
 	do {
-		index_t count = 0;
+		idx_t count = 0;
 		for (; position < buffer_size; position++) {
 			quote_search.Match(quote_pos, buffer[position]);
 			delimiter_search.Match(delimiter_pos, buffer[position]);
@@ -235,7 +260,7 @@ handle_escape:
 	quote_pos = 0;
 	position++;
 	do {
-		index_t count = 0;
+		idx_t count = 0;
 		for (; position < buffer_size; position++) {
 			quote_search.Match(quote_pos, buffer[position]);
 			escape_search.Match(escape_pos, buffer[position]);
@@ -282,9 +307,9 @@ final_state:
 void BufferedCSVReader::ParseSimpleCSV(DataChunk &insert_chunk) {
 	// used for parsing algorithm
 	bool finished_chunk = false;
-	index_t column = 0;
-	index_t offset = 0;
-	vector<index_t> escape_positions;
+	idx_t column = 0;
+	idx_t offset = 0;
+	vector<idx_t> escape_positions;
 
 	// read values into the buffer (if any)
 	if (position >= buffer_size) {
@@ -443,12 +468,12 @@ final_state:
 	Flush(insert_chunk);
 }
 
-bool BufferedCSVReader::ReadBuffer(index_t &start) {
+bool BufferedCSVReader::ReadBuffer(idx_t &start) {
 	auto old_buffer = move(buffer);
 
 	// the remaining part of the last buffer
-	index_t remaining = buffer_size - start;
-	index_t buffer_read_size = INITIAL_BUFFER_SIZE;
+	idx_t remaining = buffer_size - start;
+	idx_t buffer_read_size = INITIAL_BUFFER_SIZE;
 	while (remaining > buffer_read_size) {
 		buffer_read_size *= 2;
 	}
@@ -461,8 +486,8 @@ bool BufferedCSVReader::ReadBuffer(index_t &start) {
 		// remaining from last buffer: copy it here
 		memcpy(buffer.get(), old_buffer.get() + start, remaining);
 	}
-	source.read(buffer.get() + remaining, buffer_read_size);
-	index_t read_count = source.eof() ? source.gcount() : buffer_read_size;
+	source->read(buffer.get() + remaining, buffer_read_size);
+	idx_t read_count = source->eof() ? source->gcount() : buffer_read_size;
 	buffer_size = remaining + read_count;
 	buffer[buffer_size] = '\0';
 	if (old_buffer) {
@@ -484,7 +509,7 @@ void BufferedCSVReader::ParseCSV(DataChunk &insert_chunk) {
 	}
 }
 
-void BufferedCSVReader::AddValue(char *str_val, index_t length, index_t &column, vector<index_t> &escape_positions) {
+void BufferedCSVReader::AddValue(char *str_val, idx_t length, idx_t &column, vector<idx_t> &escape_positions) {
 	if (column == sql_types.size() && length == 0) {
 		// skip a single trailing delimiter
 		column++;
@@ -495,30 +520,30 @@ void BufferedCSVReader::AddValue(char *str_val, index_t length, index_t &column,
 		                      column + 1);
 	}
 	// insert the line number into the chunk
-	index_t row_entry = parse_chunk.data[column].count++;
+	idx_t row_entry = parse_chunk.size();
 
 	str_val[length] = '\0';
 	// test against null string
-	if (strcmp(info.null_str.c_str(), str_val) == 0 && !info.force_not_null[column]) {
+	if (!info.force_not_null[column] && strcmp(info.null_str.c_str(), str_val) == 0) {
 		parse_chunk.data[column].nullmask[row_entry] = true;
 	} else {
 		auto &v = parse_chunk.data[column];
-		auto parse_data = (const char **)v.GetData();
+		auto parse_data = (string_t *)v.GetData();
 		if (escape_positions.size() > 0) {
 			// remove escape characters (if any)
 			string old_val = str_val;
 			string new_val = "";
-			index_t prev_pos = 0;
-			for (index_t i = 0; i < escape_positions.size(); i++) {
-				index_t next_pos = escape_positions[i];
+			idx_t prev_pos = 0;
+			for (idx_t i = 0; i < escape_positions.size(); i++) {
+				idx_t next_pos = escape_positions[i];
 				new_val += old_val.substr(prev_pos, next_pos - prev_pos);
 				prev_pos = next_pos + info.escape.size();
 			}
 			new_val += old_val.substr(prev_pos, old_val.size() - prev_pos);
 			escape_positions.clear();
-			parse_data[row_entry] = v.AddString(new_val.c_str());
+			parse_data[row_entry] = v.AddString(new_val.c_str(), new_val.size());
 		} else {
-			parse_data[row_entry] = str_val;
+			parse_data[row_entry] = string_t(str_val, length);
 		}
 	}
 
@@ -526,12 +551,12 @@ void BufferedCSVReader::AddValue(char *str_val, index_t length, index_t &column,
 	column++;
 }
 
-bool BufferedCSVReader::AddRow(DataChunk &insert_chunk, index_t &column) {
+bool BufferedCSVReader::AddRow(DataChunk &insert_chunk, idx_t &column) {
 	if (column < sql_types.size()) {
 		throw ParserException("Error on line %lld: expected %lld values but got %d", linenr, sql_types.size(), column);
 	}
-	nr_elements++;
-	if (nr_elements == STANDARD_VECTOR_SIZE) {
+	parse_chunk.SetCardinality(parse_chunk.size() + 1);
+	if (parse_chunk.size() == STANDARD_VECTOR_SIZE) {
 		Flush(insert_chunk);
 		return true;
 	}
@@ -541,16 +566,17 @@ bool BufferedCSVReader::AddRow(DataChunk &insert_chunk, index_t &column) {
 }
 
 void BufferedCSVReader::Flush(DataChunk &insert_chunk) {
-	if (nr_elements == 0) {
+	if (parse_chunk.size() == 0) {
 		return;
 	}
 	// convert the columns in the parsed chunk to the types of the table
-	for (index_t col_idx = 0; col_idx < sql_types.size(); col_idx++) {
+	insert_chunk.SetCardinality(parse_chunk);
+	for (idx_t col_idx = 0; col_idx < sql_types.size(); col_idx++) {
 		if (sql_types[col_idx].id == SQLTypeId::VARCHAR) {
 			// target type is varchar: no need to convert
 			// just test that all strings are valid utf-8 strings
-			auto parse_data = (const char **)parse_chunk.data[col_idx].GetData();
-			VectorOperations::Exec(parse_chunk.data[col_idx], [&](index_t i, index_t k) {
+			auto parse_data = (string_t *)parse_chunk.data[col_idx].GetData();
+			VectorOperations::Exec(parse_chunk.data[col_idx], [&](idx_t i, idx_t k) {
 				if (!parse_chunk.data[col_idx].nullmask[i]) {
 					if (!Value::IsUTF8String(parse_data[i])) {
 						throw ParserException("Error on line %lld: file is not valid UTF8", linenr);
@@ -565,6 +591,4 @@ void BufferedCSVReader::Flush(DataChunk &insert_chunk) {
 		}
 	}
 	parse_chunk.Reset();
-
-	nr_elements = 0;
 }

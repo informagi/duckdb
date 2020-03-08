@@ -18,19 +18,19 @@ using namespace std;
 //===--------------------------------------------------------------------===//
 template <class OP, class NULLOP, bool LEFT_CONSTANT, bool RIGHT_CONSTANT>
 static void templated_boolean_function_loop(bool *__restrict ldata, bool *__restrict rdata,
-                                            bool *__restrict result_data, index_t count, sel_t *__restrict sel_vector,
+                                            bool *__restrict result_data, idx_t count, sel_t *__restrict sel_vector,
                                             nullmask_t &left_nullmask, nullmask_t &right_nullmask,
                                             nullmask_t &result_nullmask) {
 	if (left_nullmask.any() || right_nullmask.any()) {
-		VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
-			index_t left_idx = LEFT_CONSTANT ? 0 : i;
-			index_t right_idx = RIGHT_CONSTANT ? 0 : i;
+		VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
+			idx_t left_idx = LEFT_CONSTANT ? 0 : i;
+			idx_t right_idx = RIGHT_CONSTANT ? 0 : i;
 			result_data[i] = OP::Operation(ldata[left_idx], rdata[right_idx]);
 			result_nullmask[i] = NULLOP::Operation(ldata[left_idx], rdata[right_idx], left_nullmask[left_idx],
 			                                       right_nullmask[right_idx]);
 		});
 	} else {
-		VectorOperations::Exec(sel_vector, count, [&](index_t i, index_t k) {
+		VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
 			result_data[i] = OP::Operation(ldata[LEFT_CONSTANT ? 0 : i], rdata[RIGHT_CONSTANT ? 0 : i]);
 		});
 	}
@@ -38,9 +38,7 @@ static void templated_boolean_function_loop(bool *__restrict ldata, bool *__rest
 
 template <class OP, class NULLOP> static void templated_boolean_nullmask(Vector &left, Vector &right, Vector &result) {
 	assert(left.type == TypeId::BOOL && right.type == TypeId::BOOL && result.type == TypeId::BOOL);
-	assert(left.count == right.count && left.sel_vector == right.sel_vector);
-	result.count = left.count;
-	result.sel_vector = left.sel_vector;
+	assert(left.SameCardinality(right));
 
 	auto ldata = (bool *)left.GetData();
 	auto rdata = (bool *)right.GetData();
@@ -54,19 +52,21 @@ template <class OP, class NULLOP> static void templated_boolean_nullmask(Vector 
 	} else if (left.vector_type == VectorType::CONSTANT_VECTOR) {
 		// left side is constant, result is regular vector
 		result.vector_type = VectorType::FLAT_VECTOR;
-		templated_boolean_function_loop<OP, NULLOP, true, false>(
-		    ldata, rdata, result_data, result.count, result.sel_vector, left.nullmask, right.nullmask, result.nullmask);
+		templated_boolean_function_loop<OP, NULLOP, true, false>(ldata, rdata, result_data, result.size(),
+		                                                         result.sel_vector(), left.nullmask, right.nullmask,
+		                                                         result.nullmask);
 	} else if (right.vector_type == VectorType::CONSTANT_VECTOR) {
 		// right side is constant, result is regular vector
 		result.vector_type = VectorType::FLAT_VECTOR;
-		templated_boolean_function_loop<OP, NULLOP, false, true>(
-		    ldata, rdata, result_data, result.count, result.sel_vector, left.nullmask, right.nullmask, result.nullmask);
+		templated_boolean_function_loop<OP, NULLOP, false, true>(ldata, rdata, result_data, result.size(),
+		                                                         result.sel_vector(), left.nullmask, right.nullmask,
+		                                                         result.nullmask);
 	} else {
 		// no constant vectors: perform general loop
-		assert(left.count == right.count);
 		result.vector_type = VectorType::FLAT_VECTOR;
-		templated_boolean_function_loop<OP, NULLOP, false, false>(
-		    ldata, rdata, result_data, result.count, result.sel_vector, left.nullmask, right.nullmask, result.nullmask);
+		templated_boolean_function_loop<OP, NULLOP, false, false>(ldata, rdata, result_data, result.size(),
+		                                                          result.sel_vector(), left.nullmask, right.nullmask,
+		                                                          result.nullmask);
 	}
 }
 

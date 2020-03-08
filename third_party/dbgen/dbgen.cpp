@@ -4,7 +4,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "dbgen_gunk.hpp"
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "tpch_constants.hpp"
@@ -47,7 +46,7 @@ void append_value(DataChunk &chunk, size_t index, size_t &column, int32_t value)
 }
 
 void append_string(DataChunk &chunk, size_t index, size_t &column, const char *value) {
-	chunk.data[column++].SetValue(index, Value(value));
+	chunk.SetValue(column++, index, Value(value));
 }
 
 void append_decimal(DataChunk &chunk, size_t index, size_t &column, int64_t value) {
@@ -68,7 +67,7 @@ void append_char(DataChunk &chunk, size_t index, size_t &column, char value) {
 static void append_to_append_info(tpch_append_information &info) {
 	auto &chunk = info.chunk;
 	auto &table = info.table;
-	if (chunk.column_count == 0) {
+	if (chunk.column_count() == 0) {
 		// initalize the chunk
 		auto types = table->GetTypes();
 		chunk.Initialize(types);
@@ -78,9 +77,7 @@ static void append_to_append_info(tpch_append_information &info) {
 		// have to reset the chunk
 		chunk.Reset();
 	}
-	for (size_t i = 0; i < chunk.column_count; i++) {
-		chunk.data[i].count++;
-	}
+	chunk.SetCardinality(chunk.size() + 1);
 }
 
 static void append_order(order_t *o, tpch_append_information *info) {
@@ -546,7 +543,7 @@ void dbgen(double flt_scale, DuckDB &db, string schema, string suffix) {
 	for (size_t i = PART; i <= REGION; i++) {
 		auto tname = get_table_name(i);
 		if (!tname.empty()) {
-			append_info[i].table = db.catalog->GetTable(*con.context, schema, tname + suffix);
+			append_info[i].table = db.catalog->GetEntry<TableCatalogEntry>(*con.context, schema, tname + suffix);
 		}
 		append_info[i].context = con.context.get();
 	}
