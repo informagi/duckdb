@@ -6,6 +6,7 @@ add_library(duckdb_benchmark_micro OBJECT
             groupby.cpp
             in.cpp
             multiplications.cpp
+            nested.cpp
             orderby.cpp
             pointquery.cpp
             indexcreation.cpp

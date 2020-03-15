@@ -155,7 +155,7 @@ struct VectorOperations {
 	// Copy the data of <source> to the target vector
 	static void Copy(Vector &source, Vector &target, idx_t offset = 0);
 	// Append the data of <source> to the target vector
-	static void Append(Vector &source, Vector &target);
+	static void Append(Vector &source, Vector &target, idx_t old_count = 0);
 	// Copy the data of <source> to the target location, setting null values to
 	// NullValue<T>. Used to store data without separate NULL mask.
 	static void CopyToStorage(Vector &source, void *target, idx_t offset = 0, idx_t element_count = 0);

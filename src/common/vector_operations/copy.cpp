@@ -174,7 +174,7 @@ void VectorOperations::Copy(Vector &source, Vector &target, idx_t offset) {
 	}
 }
 
-void VectorOperations::Append(Vector &source, Vector &target) {
+void VectorOperations::Append(Vector &source, Vector &target, idx_t old_count) {
 	if (source.type != target.type) {
 		throw TypeMismatchException(source.type, target.type, "Append types don't match!");
 	}
@@ -187,7 +187,9 @@ void VectorOperations::Append(Vector &source, Vector &target) {
 	assert(target.vector_type == VectorType::FLAT_VECTOR);
 	assert(!target.sel_vector());
 	idx_t copy_count = source.size();
-	idx_t old_count = target.size();
+	if (old_count == 0) {
+		old_count = target.size();
+	}
 	assert(old_count + copy_count <= STANDARD_VECTOR_SIZE);
 
 	// merge null masks
