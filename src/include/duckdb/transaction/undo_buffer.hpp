@@ -11,15 +11,12 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/undo_flags.hpp"
 
-#include <memory>
-#include <vector>
-
 namespace duckdb {
 
 class WriteAheadLog;
 
 struct UndoChunk {
-	UndoChunk(idx_t size);
+	explicit UndoChunk(idx_t size);
 	~UndoChunk();
 
 	data_ptr_t WriteEntry(UndoFlags type, uint32_t len);
@@ -50,6 +47,7 @@ public:
 	data_ptr_t CreateEntry(UndoFlags type, idx_t len);
 
 	bool ChangesMade();
+	idx_t EstimatedSize();
 
 	//! Cleanup the undo buffer
 	void Cleanup();
@@ -66,10 +64,12 @@ private:
 	UndoChunk *tail;
 
 private:
-	template <class T> void IterateEntries(UndoBuffer::IteratorState &state, T &&callback);
+	template <class T>
+	void IterateEntries(UndoBuffer::IteratorState &state, T &&callback);
 	template <class T>
 	void IterateEntries(UndoBuffer::IteratorState &state, UndoBuffer::IteratorState &end_state, T &&callback);
-	template <class T> void ReverseIterateEntries(T &&callback);
+	template <class T>
+	void ReverseIterateEntries(T &&callback);
 };
 
 } // namespace duckdb

@@ -10,6 +10,8 @@
 
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/column_binding.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
+#include "duckdb/parser/group_by_node.hpp"
 
 namespace duckdb {
 
@@ -23,8 +25,16 @@ public:
 	idx_t group_index;
 	//! The table index for the aggregates of the LogicalAggregate
 	idx_t aggregate_index;
+	//! The table index for the GROUPING function calls of the LogicalAggregate
+	idx_t groupings_index;
 	//! The set of groups (optional).
 	vector<unique_ptr<Expression>> groups;
+	//! The set of grouping sets (optional).
+	vector<GroupingSet> grouping_sets;
+	//! The list of grouping function calls (optional)
+	vector<vector<idx_t>> grouping_functions;
+	//! Group statistics (optional)
+	vector<unique_ptr<BaseStatistics>> group_stats;
 
 public:
 	string ParamsToString() const override;

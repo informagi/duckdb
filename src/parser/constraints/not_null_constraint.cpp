@@ -2,11 +2,16 @@
 
 #include "duckdb/common/serializer.hpp"
 
-using namespace std;
-using namespace duckdb;
+namespace duckdb {
+
+NotNullConstraint::NotNullConstraint(column_t index) : Constraint(ConstraintType::NOT_NULL), index(index) {
+}
+
+NotNullConstraint::~NotNullConstraint() {
+}
 
 string NotNullConstraint::ToString() const {
-	return "NOT NULL Constraint";
+	return "NOT NULL";
 }
 
 unique_ptr<Constraint> NotNullConstraint::Copy() {
@@ -22,3 +27,5 @@ unique_ptr<Constraint> NotNullConstraint::Deserialize(Deserializer &source) {
 	auto index = source.Read<idx_t>();
 	return make_unique_base<Constraint, NotNullConstraint>(index);
 }
+
+} // namespace duckdb

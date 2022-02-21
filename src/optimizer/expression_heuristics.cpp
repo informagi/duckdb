@@ -1,8 +1,7 @@
 #include "duckdb/optimizer/expression_heuristics.hpp"
 #include "duckdb/planner/expression/list.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 unique_ptr<LogicalOperator> ExpressionHeuristics::Rewrite(unique_ptr<LogicalOperator> op) {
 	VisitOperator(*op);
@@ -10,7 +9,7 @@ unique_ptr<LogicalOperator> ExpressionHeuristics::Rewrite(unique_ptr<LogicalOper
 }
 
 void ExpressionHeuristics::VisitOperator(LogicalOperator &op) {
-	if (op.type == LogicalOperatorType::FILTER) {
+	if (op.type == LogicalOperatorType::LOGICAL_FILTER) {
 		// reorder all filter expressions
 		if (op.expressions.size() > 1) {
 			ReorderExpressions(op.expressions);
@@ -62,17 +61,24 @@ idx_t ExpressionHeuristics::ExpressionCost(BoundBetweenExpression &expr) {
 
 idx_t ExpressionHeuristics::ExpressionCost(BoundCaseExpression &expr) {
 	// CASE WHEN check THEN result_if_true ELSE result_if_false END
-	return Cost(*expr.check) + Cost(*expr.result_if_true) + Cost(*expr.result_if_false) + 5;
+	idx_t case_cost = 0;
+	for (auto &case_check : expr.case_checks) {
+		case_cost += Cost(*case_check.then_expr);
+		case_cost += Cost(*case_check.when_expr);
+	}
+	case_cost += Cost(*expr.else_expr);
+	return case_cost;
 }
 
 idx_t ExpressionHeuristics::ExpressionCost(BoundCastExpression &expr) {
 	// OPERATOR_CAST
 	// determine cast cost by comparing cast_expr.source_type and cast_expr_target_type
 	idx_t cast_cost = 0;
-	if (expr.target_type != expr.source_type) {
+	if (expr.return_type != expr.source_type()) {
 		// if cast from or to varchar
 		// TODO: we might want to add more cases
-		if (expr.target_type == SQLType::VARCHAR || expr.source_type == SQLType::VARCHAR) {
+		if (expr.return_type.id() == LogicalTypeId::VARCHAR || expr.source_type().id() == LogicalTypeId::VARCHAR ||
+		    expr.return_type.id() == LogicalTypeId::BLOB || expr.source_type().id() == LogicalTypeId::BLOB) {
 			cast_cost = 200;
 		} else {
 			cast_cost = 5;
@@ -130,14 +136,13 @@ idx_t ExpressionHeuristics::ExpressionCost(BoundOperatorExpression &expr, Expres
 	}
 }
 
-idx_t ExpressionHeuristics::ExpressionCost(TypeId &return_type, idx_t multiplier) {
+idx_t ExpressionHeuristics::ExpressionCost(PhysicalType return_type, idx_t multiplier) {
 	// TODO: ajust values according to benchmark results
 	switch (return_type) {
-	case TypeId::VARCHAR:
+	case PhysicalType::VARCHAR:
 		return 5 * multiplier;
-	case TypeId::FLOAT:
-		return 2 * multiplier;
-	case TypeId::DOUBLE:
+	case PhysicalType::FLOAT:
+	case PhysicalType::DOUBLE:
 		return 2 * multiplier;
 	default:
 		return 1 * multiplier;
@@ -176,19 +181,19 @@ idx_t ExpressionHeuristics::Cost(Expression &expr) {
 	}
 	case ExpressionClass::BOUND_COLUMN_REF: {
 		auto &col_expr = (BoundColumnRefExpression &)expr;
-		return ExpressionCost(col_expr.return_type, 8);
+		return ExpressionCost(col_expr.return_type.InternalType(), 8);
 	}
 	case ExpressionClass::BOUND_CONSTANT: {
 		auto &const_expr = (BoundConstantExpression &)expr;
-		return ExpressionCost(const_expr.return_type, 1);
+		return ExpressionCost(const_expr.return_type.InternalType(), 1);
 	}
 	case ExpressionClass::BOUND_PARAMETER: {
-		auto &const_expr = (BoundConstantExpression &)expr;
-		return ExpressionCost(const_expr.return_type, 1);
+		auto &const_expr = (BoundParameterExpression &)expr;
+		return ExpressionCost(const_expr.return_type.InternalType(), 1);
 	}
 	case ExpressionClass::BOUND_REF: {
 		auto &col_expr = (BoundColumnRefExpression &)expr;
-		return ExpressionCost(col_expr.return_type, 8);
+		return ExpressionCost(col_expr.return_type.InternalType(), 8);
 	}
 	default: {
 		break;
@@ -198,3 +203,5 @@ idx_t ExpressionHeuristics::Cost(Expression &expr) {
 	// return a very high value if nothing matches
 	return 1000;
 }
+
+} // namespace duckdb

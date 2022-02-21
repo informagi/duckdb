@@ -13,9 +13,11 @@
 #include "duckdb/main/materialized_query_result.hpp"
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/query_result.hpp"
+#include "duckdb/main/relation.hpp"
 #include "duckdb/main/stream_query_result.hpp"
 #include "duckdb/optimizer/join_order_optimizer.hpp"
 #include "duckdb/optimizer/rule.hpp"
+#include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/parser/constraint.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "duckdb/parser/expression/list.hpp"
@@ -30,16 +32,14 @@
 #include "duckdb/planner/operator/logical_join.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/query_node/bound_set_operation_node.hpp"
-#include "duckdb/planner/statement/list.hpp"
-#include "duckdb/planner/tableref/list.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/transaction/transaction.hpp"
 
 using namespace duckdb;
-using namespace std;
+
 template class std::unique_ptr<SQLStatement>;
-template class std::unique_ptr<AlterTableStatement>;
+template class std::unique_ptr<AlterStatement>;
 template class std::unique_ptr<CopyStatement>;
 template class std::unique_ptr<CreateStatement>;
 template class std::unique_ptr<DeleteStatement>;
@@ -64,7 +64,6 @@ template class std::unique_ptr<DefaultExpression>;
 template class std::unique_ptr<FunctionExpression>;
 template class std::unique_ptr<OperatorExpression>;
 template class std::unique_ptr<ParameterExpression>;
-template class std::unique_ptr<PreparedStatementData>;
 template class std::unique_ptr<StarExpression>;
 template class std::unique_ptr<SubqueryExpression>;
 template class std::unique_ptr<WindowExpression>;
@@ -78,16 +77,12 @@ template class std::unique_ptr<CrossProductRef>;
 template class std::unique_ptr<JoinRef>;
 template class std::unique_ptr<SubqueryRef>;
 template class std::unique_ptr<TableFunctionRef>;
+template class std::unique_ptr<Pipeline>;
+template class std::shared_ptr<Pipeline>;
+template class std::weak_ptr<Pipeline>;
+template class std::shared_ptr<PreparedStatementData>;
 
 template class std::unique_ptr<Expression>;
-template class std::unique_ptr<BoundSQLStatement>;
-template class std::unique_ptr<BoundCopyStatement>;
-template class std::unique_ptr<BoundCreateStatement>;
-template class std::unique_ptr<BoundDeleteStatement>;
-template class std::unique_ptr<BoundExecuteStatement>;
-template class std::unique_ptr<BoundInsertStatement>;
-template class std::unique_ptr<BoundSelectStatement>;
-template class std::unique_ptr<BoundUpdateStatement>;
 template class std::unique_ptr<BoundQueryNode>;
 template class std::unique_ptr<BoundSelectNode>;
 template class std::unique_ptr<BoundSetOperationNode>;
@@ -105,13 +100,6 @@ template class std::unique_ptr<BoundParameterExpression>;
 template class std::unique_ptr<BoundReferenceExpression>;
 template class std::unique_ptr<BoundSubqueryExpression>;
 template class std::unique_ptr<BoundWindowExpression>;
-template class std::unique_ptr<CommonSubExpression>;
-template class std::unique_ptr<BoundTableRef>;
-template class std::unique_ptr<BoundBaseTableRef>;
-template class std::unique_ptr<BoundCrossProductRef>;
-template class std::unique_ptr<BoundJoinRef>;
-template class std::unique_ptr<BoundSubqueryRef>;
-template class std::unique_ptr<BoundTableFunction>;
 
 template class std::unique_ptr<CatalogEntry>;
 template class std::unique_ptr<BindContext>;
@@ -121,10 +109,10 @@ template class std::unique_ptr<MaterializedQueryResult>;
 template class std::unique_ptr<StreamQueryResult>;
 template class std::unique_ptr<LogicalOperator>;
 template class std::unique_ptr<PhysicalOperator>;
-template class std::unique_ptr<PhysicalOperatorState>;
+template class std::unique_ptr<OperatorState>;
 template class std::unique_ptr<sel_t[]>;
 template class std::unique_ptr<StringHeap>;
-template class std::unique_ptr<SuperLargeHashTable>;
+template class std::unique_ptr<GroupedAggregateHashTable>;
 template class std::unique_ptr<TableRef>;
 template class std::unique_ptr<Transaction>;
 template class std::unique_ptr<uint64_t[]>;
@@ -140,9 +128,9 @@ template class std::unique_ptr<LogicalJoin>;
 template class std::unique_ptr<LogicalComparisonJoin>;
 template class std::unique_ptr<FilterInfo>;
 template class std::unique_ptr<JoinOrderOptimizer::JoinNode>;
-template class std::unique_ptr<Relation>;
+template class std::unique_ptr<SingleJoinRelation>;
+template class std::shared_ptr<Relation>;
 template class std::unique_ptr<CatalogSet>;
-template class std::unique_ptr<PreparedStatementCatalogEntry>;
 template class std::unique_ptr<Binder>;
 
 #define INSTANTIATE_VECTOR(VECTOR_DEFINITION)                                                                          \
@@ -154,38 +142,45 @@ template class std::unique_ptr<Binder>;
 	template VECTOR_DEFINITION::const_reference VECTOR_DEFINITION::front() const;                                      \
 	template VECTOR_DEFINITION::reference VECTOR_DEFINITION::front();
 
-INSTANTIATE_VECTOR(std::vector<ColumnDefinition>);
+INSTANTIATE_VECTOR(std::vector<ColumnDefinition>)
 template class std::vector<ExpressionType>;
-INSTANTIATE_VECTOR(std::vector<JoinCondition>);
-INSTANTIATE_VECTOR(std::vector<OrderByNode>);
+INSTANTIATE_VECTOR(std::vector<JoinCondition>)
+INSTANTIATE_VECTOR(std::vector<OrderByNode>)
 template class std::vector<uint64_t>;
 template class std::vector<string>;
 INSTANTIATE_VECTOR(std::vector<Expression *>)
 INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Expression>>)
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<DataChunk>>);
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<SQLStatement>>);
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<PhysicalOperator>>);
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<LogicalOperator>>);
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Transaction>>);
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<JoinOrderOptimizer::JoinNode>>);
-template class std::vector<TypeId>;
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<DataChunk>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<SQLStatement>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<PhysicalOperator>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<LogicalOperator>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Transaction>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<JoinOrderOptimizer::JoinNode>>)
+template class std::vector<PhysicalType>;
 template class std::vector<Value>;
 template class std::vector<int>;
-INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Rule>>);
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Rule>>)
+INSTANTIATE_VECTOR(std::vector<std::unique_ptr<Pipeline>>)
+INSTANTIATE_VECTOR(std::vector<std::shared_ptr<Pipeline>>)
 template class std::vector<std::vector<Expression *>>;
-template class std::vector<SQLType>;
+template class std::vector<LogicalType>;
 
+#if !defined(__clang__)
 template struct std::atomic<uint64_t>;
+#endif
+
 template class std::bitset<STANDARD_VECTOR_SIZE>;
 template class std::unordered_map<PhysicalOperator *, QueryProfiler::TreeNode *>;
 template class std::stack<PhysicalOperator *>;
 
+/* -pedantic does not like this
 #define INSTANTIATE_UNORDERED_MAP(MAP_DEFINITION)                                                                      \
-	template MAP_DEFINITION::mapped_type &MAP_DEFINITION::operator[](MAP_DEFINITION::key_type &&k);                    \
-	template MAP_DEFINITION::mapped_type &MAP_DEFINITION::operator[](const MAP_DEFINITION::key_type &k);
+    template MAP_DEFINITION::mapped_type &MAP_DEFINITION::operator[](MAP_DEFINITION::key_type &&k);                    \
+    template MAP_DEFINITION::mapped_type &MAP_DEFINITION::operator[](const MAP_DEFINITION::key_type &k);
 
 using catalog_map = std::unordered_map<string, unique_ptr<CatalogEntry>>;
-INSTANTIATE_UNORDERED_MAP(catalog_map);
+INSTANTIATE_UNORDERED_MAP(catalog_map)
+*/
 
 template class std::unordered_map<string, uint64_t>;
 template class std::unordered_map<string, std::vector<string>>;

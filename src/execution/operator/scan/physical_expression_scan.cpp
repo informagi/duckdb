@@ -1,43 +1,62 @@
 #include "duckdb/execution/operator/scan/physical_expression_scan.hpp"
-
+#include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-class PhysicalExpressionScanState : public PhysicalOperatorState {
+class ExpressionScanState : public OperatorState {
 public:
-	PhysicalExpressionScanState(PhysicalOperator *child) : PhysicalOperatorState(child), expression_index(0) {
+	explicit ExpressionScanState(const PhysicalExpressionScan &op) : expression_index(0) {
+		temp_chunk.Initialize(op.GetTypes());
 	}
 
 	//! The current position in the scan
 	idx_t expression_index;
-
-	unique_ptr<ExpressionExecutor> executor;
+	//! Temporary chunk for evaluating expressions
+	DataChunk temp_chunk;
 };
 
-void PhysicalExpressionScan::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state_) {
-	auto state = (PhysicalExpressionScanState *)state_;
-	if (state->expression_index >= expressions.size()) {
-		// finished executing all expression lists
-		return;
-	}
+unique_ptr<OperatorState> PhysicalExpressionScan::GetOperatorState(ClientContext &context) const {
+	return make_unique<ExpressionScanState>(*this);
+}
 
-	if (state->expression_index == 0) {
-		// first run, fetch the chunk from the child
-		assert(children.size() == 1);
-		children[0]->GetChunk(context, state->child_chunk, state->child_state.get());
-		if (state->child_chunk.size() == 0) {
-			return;
+OperatorResultType PhysicalExpressionScan::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+                                                   OperatorState &state_p) const {
+	auto &state = (ExpressionScanState &)state_p;
+
+	for (; chunk.size() + input.size() <= STANDARD_VECTOR_SIZE && state.expression_index < expressions.size();
+	     state.expression_index++) {
+		state.temp_chunk.Reset();
+		EvaluateExpression(state.expression_index, &input, state.temp_chunk);
+		chunk.Append(state.temp_chunk);
+	}
+	if (state.expression_index < expressions.size()) {
+		return OperatorResultType::HAVE_MORE_OUTPUT;
+	} else {
+		state.expression_index = 0;
+		return OperatorResultType::NEED_MORE_INPUT;
+	}
+}
+
+void PhysicalExpressionScan::EvaluateExpression(idx_t expression_idx, DataChunk *child_chunk, DataChunk &result) const {
+	ExpressionExecutor executor(expressions[expression_idx]);
+	if (child_chunk) {
+		child_chunk->Verify();
+		executor.Execute(*child_chunk, result);
+	} else {
+		executor.Execute(result);
+	}
+}
+
+bool PhysicalExpressionScan::IsFoldable() const {
+	for (auto &expr_list : expressions) {
+		for (auto &expr : expr_list) {
+			if (!expr->IsFoldable()) {
+				return false;
+			}
 		}
 	}
-	// now execute the expressions of the nth expression list for the child chunk list
-	state->executor = make_unique<ExpressionExecutor>(expressions[state->expression_index]);
-	state->executor->Execute(state->child_chunk, chunk);
-
-	state->expression_index++;
+	return true;
 }
 
-unique_ptr<PhysicalOperatorState> PhysicalExpressionScan::GetOperatorState() {
-	return make_unique<PhysicalExpressionScanState>(children[0].get());
-}
+} // namespace duckdb

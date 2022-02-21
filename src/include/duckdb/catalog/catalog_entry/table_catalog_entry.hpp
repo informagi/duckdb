@@ -14,6 +14,7 @@
 #include "duckdb/parser/constraint.hpp"
 #include "duckdb/planner/bound_constraint.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 
 namespace duckdb {
 
@@ -21,6 +22,12 @@ class ColumnStatistics;
 class DataTable;
 struct CreateTableInfo;
 struct BoundCreateTableInfo;
+
+struct RenameColumnInfo;
+struct AddColumnInfo;
+struct RemoveColumnInfo;
+struct SetDefaultInfo;
+struct ChangeColumnTypeInfo;
 
 //! A table catalog entry
 class TableCatalogEntry : public StandardEntry {
@@ -38,7 +45,7 @@ public:
 	//! A list of constraints that are part of this table
 	vector<unique_ptr<BoundConstraint>> bound_constraints;
 	//! A map of column name to column index
-	unordered_map<string, column_t> name_map;
+	case_insensitive_map_t<column_t> name_map;
 
 public:
 	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo *info) override;
@@ -48,13 +55,32 @@ public:
 	//! exception if the column does not exist.
 	ColumnDefinition &GetColumn(const string &name);
 	//! Returns a list of types of the table
-	vector<TypeId> GetTypes();
-	//! Returns a list of types of the specified columns of the table
-	vector<TypeId> GetTypes(const vector<column_t> &column_ids);
+	vector<LogicalType> GetTypes();
+	string ToSQL() override;
 
 	//! Serialize the meta information of the TableCatalogEntry a serializer
 	virtual void Serialize(Serializer &serializer);
 	//! Deserializes to a CreateTableInfo
 	static unique_ptr<CreateTableInfo> Deserialize(Deserializer &source);
+
+	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+
+	void SetAsRoot() override;
+
+	void CommitAlter(AlterInfo &info);
+	void CommitDrop();
+
+	//! Returns the column index of the specified column name.
+	//! If the column does not exist:
+	//! If if_exists is true, returns DConstants::INVALID_INDEX
+	//! If if_exists is false, throws an exception
+	idx_t GetColumnIndex(string &name, bool if_exists = false);
+
+private:
+	unique_ptr<CatalogEntry> RenameColumn(ClientContext &context, RenameColumnInfo &info);
+	unique_ptr<CatalogEntry> AddColumn(ClientContext &context, AddColumnInfo &info);
+	unique_ptr<CatalogEntry> RemoveColumn(ClientContext &context, RemoveColumnInfo &info);
+	unique_ptr<CatalogEntry> SetDefault(ClientContext &context, SetDefaultInfo &info);
+	unique_ptr<CatalogEntry> ChangeColumnType(ClientContext &context, ChangeColumnTypeInfo &info);
 };
 } // namespace duckdb

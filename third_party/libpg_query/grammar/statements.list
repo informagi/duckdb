@@ -2,9 +2,12 @@ AlterObjectSchemaStmt
 AlterSeqStmt
 AlterTableStmt
 AnalyzeStmt
+CallStmt
 CheckPointStmt
 CopyStmt
 CreateAsStmt
+CreateEnumStmt
+CreateFunctionStmt
 CreateSchemaStmt
 CreateSeqStmt
 CreateStmt
@@ -13,6 +16,8 @@ DeleteStmt
 DropStmt
 ExecuteStmt
 ExplainStmt
+ExportStmt
+ImportStmt
 IndexStmt
 InsertStmt
 LoadStmt

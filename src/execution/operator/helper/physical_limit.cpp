@@ -1,63 +1,158 @@
 #include "duckdb/execution/operator/helper/physical_limit.hpp"
 
-using namespace duckdb;
-using namespace std;
+#include "duckdb/common/algorithm.hpp"
 
-class PhysicalLimitOperatorState : public PhysicalOperatorState {
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/common/types/chunk_collection.hpp"
+
+namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Sink
+//===--------------------------------------------------------------------===//
+class LimitGlobalState : public GlobalSinkState {
 public:
-	PhysicalLimitOperatorState(PhysicalOperator *child, idx_t current_offset = 0)
-	    : PhysicalOperatorState(child), current_offset(current_offset) {
+	explicit LimitGlobalState(const PhysicalLimit &op) : current_offset(0) {
+		this->limit = op.limit_expression ? DConstants::INVALID_INDEX : op.limit_value;
+		this->offset = op.offset_expression ? DConstants::INVALID_INDEX : op.offset_value;
 	}
 
 	idx_t current_offset;
+	idx_t limit;
+	idx_t offset;
+	ChunkCollection data;
 };
 
-void PhysicalLimit::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state_) {
-	auto state = reinterpret_cast<PhysicalLimitOperatorState *>(state_);
+unique_ptr<GlobalSinkState> PhysicalLimit::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<LimitGlobalState>(*this);
+}
 
-	idx_t max_element = limit + offset;
-	if (state->current_offset >= max_element) {
-		return;
+SinkResultType PhysicalLimit::Sink(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate,
+                                   DataChunk &input) const {
+	D_ASSERT(input.size() > 0);
+	auto &state = (LimitGlobalState &)gstate;
+	auto &limit = state.limit;
+	auto &offset = state.offset;
+
+	if (limit != DConstants::INVALID_INDEX && offset != DConstants::INVALID_INDEX) {
+		idx_t max_element = limit + offset;
+		if ((limit == 0 || state.current_offset >= max_element) && !(limit_expression || offset_expression)) {
+			return SinkResultType::FINISHED;
+		}
 	}
 
 	// get the next chunk from the child
-	children[0]->GetChunk(context, state->child_chunk, state->child_state.get());
-	if (state->child_chunk.size() == 0) {
-		return;
+	if (limit == DConstants::INVALID_INDEX) {
+		limit = 1ULL << 62ULL;
+		Value val = GetDelimiter(input, limit_expression.get());
+		if (!val.is_null) {
+			limit = val.GetValue<idx_t>();
+		}
+		if (limit > 1ULL << 62ULL) {
+			throw BinderException("Max value %lld for LIMIT/OFFSET is %lld", limit, 1ULL << 62ULL);
+		}
+	}
+	if (offset == DConstants::INVALID_INDEX) {
+		offset = 0;
+		Value val = GetDelimiter(input, offset_expression.get());
+		if (!val.is_null) {
+			offset = val.GetValue<idx_t>();
+		}
+		if (offset > 1ULL << 62ULL) {
+			throw BinderException("Max value %lld for LIMIT/OFFSET is %lld", offset, 1ULL << 62ULL);
+		}
+	}
+	idx_t max_element = limit + offset;
+	if (limit == 0 || state.current_offset >= max_element) {
+		return SinkResultType::FINISHED;
+	}
+	if (!HandleOffset(input, state.current_offset, offset, limit)) {
+		return SinkResultType::NEED_MORE_INPUT;
 	}
 
-	if (state->current_offset < offset) {
+	state.data.Append(input);
+	return SinkResultType::NEED_MORE_INPUT;
+}
+
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class LimitOperatorState : public GlobalSourceState {
+public:
+	LimitOperatorState() : chunk_idx(0) {
+	}
+
+	idx_t chunk_idx;
+};
+
+unique_ptr<GlobalSourceState> PhysicalLimit::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<LimitOperatorState>();
+}
+
+void PhysicalLimit::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate_p,
+                            LocalSourceState &lstate) const {
+	auto &gstate = (LimitGlobalState &)*sink_state;
+	auto &state = (LimitOperatorState &)gstate_p;
+	if (state.chunk_idx >= gstate.data.ChunkCount()) {
+		return;
+	}
+	chunk.Reference(gstate.data.GetChunk(state.chunk_idx));
+	state.chunk_idx++;
+}
+
+bool PhysicalLimit::HandleOffset(DataChunk &input, idx_t &current_offset, idx_t offset, idx_t limit) {
+	idx_t max_element = limit + offset;
+	if (limit == DConstants::INVALID_INDEX) {
+		max_element = DConstants::INVALID_INDEX;
+	}
+	idx_t input_size = input.size();
+	if (current_offset < offset) {
 		// we are not yet at the offset point
-		if (state->current_offset + state->child_chunk.size() >= offset) {
+		if (current_offset + input.size() > offset) {
 			// however we will reach it in this chunk
 			// we have to copy part of the chunk with an offset
-			idx_t start_position = offset - state->current_offset;
-			idx_t chunk_count = min(limit, state->child_chunk.size() - start_position);
-
-			// set up a slice of the input chunks
-			chunk.SetCardinality(chunk_count, state->child_chunk.sel_vector);
-			for (idx_t i = 0; i < chunk.column_count(); i++) {
-				chunk.data[i].Slice(state->child_chunk.data[i], start_position);
+			idx_t start_position = offset - current_offset;
+			auto chunk_count = MinValue<idx_t>(limit, input.size() - start_position);
+			SelectionVector sel(STANDARD_VECTOR_SIZE);
+			for (idx_t i = 0; i < chunk_count; i++) {
+				sel.set_index(i, start_position + i);
 			}
+			// set up a slice of the input chunks
+			input.Slice(input, sel, chunk_count);
+		} else {
+			current_offset += input_size;
+			return false;
 		}
 	} else {
 		// have to copy either the entire chunk or part of it
 		idx_t chunk_count;
-		if (state->current_offset + state->child_chunk.size() >= max_element) {
+		if (current_offset + input.size() >= max_element) {
 			// have to limit the count of the chunk
-			chunk_count = max_element - state->current_offset;
+			chunk_count = max_element - current_offset;
 		} else {
 			// we copy the entire chunk
-			chunk_count = state->child_chunk.size();
+			chunk_count = input.size();
 		}
 		// instead of copying we just change the pointer in the current chunk
-		chunk.Reference(state->child_chunk);
-		chunk.SetCardinality(chunk_count, state->child_chunk.sel_vector);
+		input.Reference(input);
+		input.SetCardinality(chunk_count);
 	}
 
-	state->current_offset += state->child_chunk.size();
+	current_offset += input_size;
+	return true;
 }
 
-unique_ptr<PhysicalOperatorState> PhysicalLimit::GetOperatorState() {
-	return make_unique<PhysicalLimitOperatorState>(children[0].get(), 0);
+Value PhysicalLimit::GetDelimiter(DataChunk &input, Expression *expr) {
+	DataChunk limit_chunk;
+	vector<LogicalType> types {expr->return_type};
+	limit_chunk.Initialize(types);
+	ExpressionExecutor limit_executor(expr);
+	auto input_size = input.size();
+	input.SetCardinality(1);
+	limit_executor.Execute(input, limit_chunk);
+	input.SetCardinality(input_size);
+	auto limit_value = limit_chunk.GetValue(0, 0);
+	return limit_value;
 }
+
+} // namespace duckdb

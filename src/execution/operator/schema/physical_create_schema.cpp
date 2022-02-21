@@ -1,10 +1,31 @@
 #include "duckdb/execution/operator/schema/physical_create_schema.hpp"
 #include "duckdb/catalog/catalog.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-void PhysicalCreateSchema::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) {
-	Catalog::GetCatalog(context).CreateSchema(context, info.get());
-	state->finished = true;
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class CreateSchemaSourceState : public GlobalSourceState {
+public:
+	CreateSchemaSourceState() : finished(false) {
+	}
+
+	bool finished;
+};
+
+unique_ptr<GlobalSourceState> PhysicalCreateSchema::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<CreateSchemaSourceState>();
 }
+
+void PhysicalCreateSchema::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+                                   LocalSourceState &lstate) const {
+	auto &state = (CreateSchemaSourceState &)gstate;
+	if (state.finished) {
+		return;
+	}
+	Catalog::GetCatalog(context.client).CreateSchema(context.client, info.get());
+	state.finished = true;
+}
+
+} // namespace duckdb

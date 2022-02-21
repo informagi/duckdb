@@ -11,13 +11,11 @@
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
 
-#include <vector>
-
 namespace duckdb {
 
 class InsertStatement : public SQLStatement {
 public:
-	InsertStatement() : SQLStatement(StatementType::INSERT), schema(DEFAULT_SCHEMA){};
+	InsertStatement();
 
 	//! The select statement to insert from
 	unique_ptr<SelectStatement> select_statement;
@@ -28,6 +26,9 @@ public:
 	string table;
 	//! Schema name to insert to
 	string schema;
+
+public:
+	unique_ptr<SQLStatement> Copy() const override;
 };
 
 } // namespace duckdb

@@ -29,6 +29,9 @@ public:
 	ParsedExpression(ExpressionType type, ExpressionClass expression_class) : BaseExpression(type, expression_class) {
 	}
 
+	//! The location in the query (if any)
+	idx_t query_location = DConstants::INVALID_INDEX;
+
 public:
 	bool IsAggregate() const override;
 	bool IsWindow() const override;
@@ -37,7 +40,7 @@ public:
 	bool HasParameter() const override;
 
 	bool Equals(const BaseExpression *other) const override;
-	uint64_t Hash() const override;
+	hash_t Hash() const override;
 
 	//! Create a copy of this expression
 	virtual unique_ptr<ParsedExpression> Copy() const = 0;

@@ -6,10 +6,12 @@
 using namespace duckdb;
 using namespace std;
 
-TEST_CASE("Test storage that exceeds a single block", "[storage][.]") {
+TEST_CASE("Test storage that exceeds a single block", "[storage]") {
 	unique_ptr<MaterializedQueryResult> result;
 	auto storage_database = TestCreatePath("storage_test");
 	auto config = GetTestConfig();
+
+	config->force_compression = CompressionType::COMPRESSION_UNCOMPRESSED;
 
 	uint64_t integer_count = 3 * (Storage::BLOCK_SIZE / sizeof(int32_t));
 	uint64_t expected_sum;
@@ -54,10 +56,12 @@ TEST_CASE("Test storage that exceeds a single block", "[storage][.]") {
 	DeleteDatabase(storage_database);
 }
 
-TEST_CASE("Test storage that exceeds a single block with different types", "[storage][.]") {
+TEST_CASE("Test storage that exceeds a single block with different types", "[storage]") {
 	unique_ptr<MaterializedQueryResult> result;
 	auto storage_database = TestCreatePath("storage_test");
 	auto config = GetTestConfig();
+
+	config->force_compression = CompressionType::COMPRESSION_UNCOMPRESSED;
 
 	uint64_t integer_count = 3 * (Storage::BLOCK_SIZE / sizeof(int32_t));
 	Value sum;
@@ -91,10 +95,12 @@ TEST_CASE("Test storage that exceeds a single block with different types", "[sto
 	DeleteDatabase(storage_database);
 }
 
-TEST_CASE("Test storing strings that exceed a single block", "[storage][.]") {
+TEST_CASE("Test storing strings that exceed a single block", "[storage]") {
 	unique_ptr<MaterializedQueryResult> result;
 	auto storage_database = TestCreatePath("storage_test");
 	auto config = GetTestConfig();
+
+	config->force_compression = CompressionType::COMPRESSION_UNCOMPRESSED;
 
 	uint64_t string_count = 3 * (Storage::BLOCK_SIZE / (sizeof(char) * 15));
 	Value sum;
@@ -134,12 +140,16 @@ TEST_CASE("Test storing strings that exceed a single block", "[storage][.]") {
 	{
 		DuckDB db(storage_database, config.get());
 		Connection con(db);
-		REQUIRE_NO_FAIL(con.Query("UPDATE test SET a='aaa' WHERE a='a'"));
+		result = con.Query("SELECT count(a) FROM test WHERE a='a'");
+		REQUIRE(CHECK_COLUMN(result, 0, {count_per_group}));
+		result = con.Query("UPDATE test SET a='aaa' WHERE a='a'");
+		REQUIRE(CHECK_COLUMN(result, 0, {count_per_group}));
 	}
 	// reload the database from disk again
 	for (idx_t i = 0; i < 2; i++) {
 		DuckDB db(storage_database, config.get());
 		Connection con(db);
+
 		result = con.Query("SELECT a, COUNT(*) FROM test GROUP BY a ORDER BY a");
 		REQUIRE(CHECK_COLUMN(result, 0, {"aaa", "bb", "ccc", "dddd", "eeeee"}));
 		REQUIRE(CHECK_COLUMN(result, 1,
@@ -149,10 +159,12 @@ TEST_CASE("Test storing strings that exceed a single block", "[storage][.]") {
 	DeleteDatabase(storage_database);
 }
 
-TEST_CASE("Test storing big strings", "[storage][.]") {
+TEST_CASE("Test storing big strings", "[storage]") {
 	unique_ptr<MaterializedQueryResult> result;
 	auto storage_database = TestCreatePath("storage_test");
 	auto config = GetTestConfig();
+
+	config->force_compression = CompressionType::COMPRESSION_UNCOMPRESSED;
 
 	uint64_t string_length = 64;
 	// make sure the database does not exist

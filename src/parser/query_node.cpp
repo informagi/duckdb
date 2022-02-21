@@ -3,9 +3,9 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/query_node/set_operation_node.hpp"
 #include "duckdb/parser/query_node/recursive_cte_node.hpp"
+#include "duckdb/common/limits.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 bool QueryNode::Equals(const QueryNode *other) const {
 	if (!other) {
@@ -17,63 +17,80 @@ bool QueryNode::Equals(const QueryNode *other) const {
 	if (other->type != this->type) {
 		return false;
 	}
-	if (select_distinct != other->select_distinct) {
+	if (modifiers.size() != other->modifiers.size()) {
 		return false;
 	}
-	if (!BaseExpression::Equals(limit.get(), other->limit.get())) {
+	for (idx_t i = 0; i < modifiers.size(); i++) {
+		if (!modifiers[i]->Equals(other->modifiers[i].get())) {
+			return false;
+		}
+	}
+	// WITH clauses (CTEs)
+	if (cte_map.size() != other->cte_map.size()) {
 		return false;
 	}
-	if (!BaseExpression::Equals(offset.get(), other->offset.get())) {
-		return false;
-	}
-	if (orders.size() != other->orders.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < orders.size(); i++) {
-		if (orders[i].type != other->orders[i].type ||
-		    !orders[i].expression->Equals(other->orders[i].expression.get())) {
+	for (auto &entry : cte_map) {
+		auto other_entry = other->cte_map.find(entry.first);
+		if (other_entry == other->cte_map.end()) {
+			return false;
+		}
+		if (entry.second->aliases != other_entry->second->aliases) {
+			return false;
+		}
+		if (!entry.second->query->Equals(other_entry->second->query.get())) {
 			return false;
 		}
 	}
 	return other->type == type;
 }
 
-void QueryNode::CopyProperties(QueryNode &other) {
-	other.select_distinct = select_distinct;
-	// order
-	for (auto &order : orders) {
-		other.orders.push_back(OrderByNode(order.type, order.expression->Copy()));
+void QueryNode::CopyProperties(QueryNode &other) const {
+	for (auto &modifier : modifiers) {
+		other.modifiers.push_back(modifier->Copy());
 	}
-	// limit
-	other.limit = limit ? limit->Copy() : nullptr;
-	other.offset = offset ? offset->Copy() : nullptr;
+	for (auto &kv : cte_map) {
+		auto kv_info = make_unique<CommonTableExpressionInfo>();
+		for (auto &al : kv.second->aliases) {
+			kv_info->aliases.push_back(al);
+		}
+		kv_info->query = unique_ptr_cast<SQLStatement, SelectStatement>(kv.second->query->Copy());
+		other.cte_map[kv.first] = move(kv_info);
+	}
 }
 
 void QueryNode::Serialize(Serializer &serializer) {
 	serializer.Write<QueryNodeType>(type);
-	serializer.Write<bool>(select_distinct);
-	serializer.WriteOptional(limit);
-	serializer.WriteOptional(offset);
-	serializer.Write<idx_t>(orders.size());
-	for (idx_t i = 0; i < orders.size(); i++) {
-		serializer.Write<OrderType>(orders[i].type);
-		orders[i].expression->Serialize(serializer);
+	serializer.Write<idx_t>(modifiers.size());
+	for (idx_t i = 0; i < modifiers.size(); i++) {
+		modifiers[i]->Serialize(serializer);
+	}
+	// cte_map
+	D_ASSERT(cte_map.size() <= NumericLimits<uint32_t>::Maximum());
+	serializer.Write<uint32_t>((uint32_t)cte_map.size());
+	for (auto &cte : cte_map) {
+		serializer.WriteString(cte.first);
+		serializer.WriteStringVector(cte.second->aliases);
+		cte.second->query->Serialize(serializer);
 	}
 }
 
 unique_ptr<QueryNode> QueryNode::Deserialize(Deserializer &source) {
 	unique_ptr<QueryNode> result;
 	auto type = source.Read<QueryNodeType>();
-	auto select_distinct = source.Read<bool>();
-	auto limit = source.ReadOptional<ParsedExpression>();
-	auto offset = source.ReadOptional<ParsedExpression>();
-	idx_t order_count = source.Read<idx_t>();
-	vector<OrderByNode> orders;
-	for (idx_t i = 0; i < order_count; i++) {
-		OrderByNode node;
-		node.type = source.Read<OrderType>();
-		node.expression = ParsedExpression::Deserialize(source);
-		orders.push_back(move(node));
+	auto modifier_count = source.Read<idx_t>();
+	vector<unique_ptr<ResultModifier>> modifiers;
+	for (idx_t i = 0; i < modifier_count; i++) {
+		modifiers.push_back(ResultModifier::Deserialize(source));
+	}
+	// cte_map
+	auto cte_count = source.Read<uint32_t>();
+	unordered_map<string, unique_ptr<CommonTableExpressionInfo>> cte_map;
+	for (idx_t i = 0; i < cte_count; i++) {
+		auto name = source.Read<string>();
+		auto info = make_unique<CommonTableExpressionInfo>();
+		source.ReadStringVector(info->aliases);
+		info->query = SelectStatement::Deserialize(source);
+		cte_map[name] = move(info);
 	}
 	switch (type) {
 	case QueryNodeType::SELECT_NODE:
@@ -88,9 +105,9 @@ unique_ptr<QueryNode> QueryNode::Deserialize(Deserializer &source) {
 	default:
 		throw SerializationException("Could not deserialize Query Node: unknown type!");
 	}
-	result->select_distinct = select_distinct;
-	result->limit = move(limit);
-	result->offset = move(offset);
-	result->orders = move(orders);
+	result->modifiers = move(modifiers);
+	result->cte_map = move(cte_map);
 	return result;
 }
+
+} // namespace duckdb

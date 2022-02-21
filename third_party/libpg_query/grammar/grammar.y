@@ -24,6 +24,7 @@
 	PGJoinType			jtype;
 	PGDropBehavior		dbehavior;
 	PGOnCommitAction		oncommit;
+	PGOnCreateConflict		oncreateconflict;
 	PGList				*list;
 	PGNode				*node;
 	PGValue				*value;
@@ -70,7 +71,7 @@
  */
 %token <str>	IDENT FCONST SCONST BCONST XCONST Op
 %token <ival>	ICONST PARAM
-%token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
+%token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER LAMBDA_ARROW
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
 
 /*
@@ -100,12 +101,13 @@
 %nonassoc	SET				/* see */
 %left		UNION EXCEPT
 %left		INTERSECT
+%left		LAMBDA_ARROW
 %left		OR
 %left		AND
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS
-%nonassoc	BETWEEN IN_P LIKE ILIKE SIMILAR NOT_LA
+%nonassoc	BETWEEN IN_P GLOB LIKE ILIKE SIMILAR NOT_LA
 %nonassoc	ESCAPE			/* ESCAPE must be just above LIKE/ILIKE/SIMILAR */
 %left		POSTFIXOP		/* dummy for postfix Op rules */
 /*
@@ -157,7 +159,7 @@
  */
 %left		JOIN CROSS LEFT FULL RIGHT INNER_P NATURAL
 /* kluge to keep from causing shift/reduce conflicts */
-%right		PRESERVE STRIP_P
+%right		PRESERVE STRIP_P IGNORE_P RESPECT_P
 
 %%
 

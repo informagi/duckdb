@@ -5,9 +5,15 @@ import socket
 import time
 from contextlib import closing
 import urllib.parse
+import sys
 
-BIN_PREFIX="../../build/debug/tools/rest"
+if len(sys.argv) < 2:
+	print("Usage: test_the_rest.py [path_to_tools_rest_binaries]")
+	sys.exit(-1)
+
+BIN_PREFIX=sys.argv[1]
 DBFILE = "tpch_sf01.duckdb"
+DUCKDB_PREFIX = os.path.join(BIN_PREFIX, '..', '..', 'duckdb')
 
 
 def find_free_port():
@@ -17,21 +23,21 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-# create binary
-process = subprocess.Popen("make debug -C ../..".split(' '))
-process.wait()
+# check for binary
 server_binary = "%s/duckdb_rest_server" % BIN_PREFIX
-if process.returncode != 0 or not os.path.isfile(server_binary):
-	raise Exception('build failed')
+if not os.path.isfile(server_binary):
+	raise Exception('could not find rest binary')
 
 
 # create database if not exists
 db_file = "%s/%s" % (BIN_PREFIX, DBFILE)
 if not os.path.isfile(db_file):
-	process = subprocess.Popen(("%s/duckdb_dbgen --database=%s --scale_factor=0.1" % (BIN_PREFIX, db_file)).split(' '))
-	process.wait()
+	print('Generating TPC-H Database')
+	process = subprocess.run([DUCKDB_PREFIX, db_file], input='CALL dbgen(sf=0.1)', stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf8')
 	if process.returncode != 0 or not os.path.isfile(db_file):
 		raise Exception('dbgen failed')
+	# hack to checkpoint the WAL
+	process = subprocess.run([DUCKDB_PREFIX, db_file], input='SELECT 42', stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf8')
 
 
 

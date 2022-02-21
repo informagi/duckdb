@@ -18,13 +18,61 @@ namespace duckdb {
 class PhysicalPiecewiseMergeJoin : public PhysicalComparisonJoin {
 public:
 	PhysicalPiecewiseMergeJoin(LogicalOperator &op, unique_ptr<PhysicalOperator> left,
-	                           unique_ptr<PhysicalOperator> right, vector<JoinCondition> cond, JoinType join_type);
+	                           unique_ptr<PhysicalOperator> right, vector<JoinCondition> cond, JoinType join_type,
+	                           idx_t estimated_cardinality);
 
-	vector<TypeId> join_key_types;
+	vector<LogicalType> join_key_types;
 
 public:
-	void GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) override;
-	unique_ptr<PhysicalOperatorState> GetOperatorState() override;
+	// Operator Interface
+	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+	                           OperatorState &state) const override;
+
+	bool ParallelOperator() const override {
+		return true;
+	}
+
+	bool RequiresCache() const override {
+		return true;
+	}
+
+public:
+	// Source interface
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
+	void GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+	             LocalSourceState &lstate) const override;
+
+	bool IsSource() const override {
+		return IsRightOuterJoin(join_type);
+	}
+	bool ParallelSource() const override {
+		return true;
+	}
+
+public:
+	// Sink Interface
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override;
+	SinkResultType Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate,
+	                    DataChunk &input) const override;
+	void Combine(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate) const override;
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          GlobalSinkState &gstate) const override;
+
+	bool IsSink() const override {
+		return true;
+	}
+	bool ParallelSink() const override {
+		return true;
+	}
+
+private:
+	// resolve joins that output max N elements (SEMI, ANTI, MARK)
+	void ResolveSimpleJoin(ExecutionContext &context, DataChunk &input, DataChunk &chunk, OperatorState &state) const;
+	// resolve joins that can potentially output N*M elements (INNER, LEFT, FULL)
+	OperatorResultType ResolveComplexJoin(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+	                                      OperatorState &state) const;
 };
 
 } // namespace duckdb

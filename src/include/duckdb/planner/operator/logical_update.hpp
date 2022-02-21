@@ -14,20 +14,18 @@ namespace duckdb {
 
 class LogicalUpdate : public LogicalOperator {
 public:
-	LogicalUpdate(TableCatalogEntry *table, vector<column_t> columns, vector<unique_ptr<Expression>> expressions,
-	              vector<unique_ptr<Expression>> bound_defaults)
-	    : LogicalOperator(LogicalOperatorType::UPDATE, std::move(expressions)), table(table), columns(columns),
-	      bound_defaults(move(bound_defaults)) {
+	explicit LogicalUpdate(TableCatalogEntry *table)
+	    : LogicalOperator(LogicalOperatorType::LOGICAL_UPDATE), table(table) {
 	}
 
 	TableCatalogEntry *table;
 	vector<column_t> columns;
 	vector<unique_ptr<Expression>> bound_defaults;
-	bool is_index_update;
+	bool update_is_del_and_insert;
 
 protected:
 	void ResolveTypes() override {
-		types.push_back(TypeId::INT64);
+		types.emplace_back(LogicalType::BIGINT);
 	}
 };
 } // namespace duckdb

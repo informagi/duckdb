@@ -154,7 +154,7 @@ select_clause:
 simple_select:
 			SELECT opt_all_clause opt_target_list
 			into_clause from_clause where_clause
-			group_clause having_clause window_clause
+			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = $3;
@@ -164,11 +164,13 @@ simple_select:
 					n->groupClause = $7;
 					n->havingClause = $8;
 					n->windowClause = $9;
+					n->qualifyClause = $10;
+					n->sampleOptions = $11;
 					$$ = (PGNode *)n;
 				}
 			| SELECT distinct_clause target_list
 			into_clause from_clause where_clause
-			group_clause having_clause window_clause
+			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->distinctClause = $2;
@@ -179,6 +181,8 @@ simple_select:
 					n->groupClause = $7;
 					n->havingClause = $8;
 					n->windowClause = $9;
+					n->qualifyClause = $10;
+					n->sampleOptions = $11;
 					$$ = (PGNode *)n;
 				}
 			| values_clause							{ $$ = $1; }
@@ -361,6 +365,12 @@ opt_all_clause:
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
+opt_ignore_nulls:
+			IGNORE_P NULLS_P						{ $$ = true;}
+			| RESPECT_P NULLS_P						{ $$ = false;}
+			| /*EMPTY*/								{ $$ = false; }
+		;
+
 opt_sort_clause:
 			sort_clause								{ $$ = $1;}
 			| /*EMPTY*/								{ $$ = NIL; }
@@ -401,7 +411,7 @@ opt_asc_desc: ASC_P							{ $$ = PG_SORTBY_ASC; }
 		;
 
 opt_nulls_order: NULLS_LA FIRST_P			{ $$ = PG_SORTBY_NULLS_FIRST; }
-			| NULLS_LA LAST_P				{ $$ = SORTBY_NULLS_LAST; }
+			| NULLS_LA LAST_P				{ $$ = PG_SORTBY_NULLS_LAST; }
 			| /*EMPTY*/						{ $$ = PG_SORTBY_NULLS_DEFAULT; }
 		;
 
@@ -450,6 +460,90 @@ offset_clause:
 				{ $$ = $2; }
 		;
 
+/*
+ * SAMPLE clause
+ */
+sample_count:
+	FCONST '%'
+		{
+			$$ = makeSampleSize(makeFloat($1), true);
+		}
+	| ICONST '%'
+		{
+			$$ = makeSampleSize(makeInteger($1), true);
+		}
+	| FCONST PERCENT
+		{
+			$$ = makeSampleSize(makeFloat($1), true);
+		}
+	| ICONST PERCENT
+		{
+			$$ = makeSampleSize(makeInteger($1), true);
+		}
+	| ICONST
+		{
+			$$ = makeSampleSize(makeInteger($1), false);
+		}
+	| ICONST ROWS
+		{
+			$$ = makeSampleSize(makeInteger($1), false);
+		}
+	;
+
+sample_clause:
+			USING SAMPLE tablesample_entry
+				{
+					$$ = $3;
+				}
+			| /* EMPTY */
+				{ $$ = NULL; }
+		;
+
+/*
+ * TABLESAMPLE decoration in a FROM item
+ */
+opt_sample_func:
+			ColId					{ $$ = $1; }
+			| /*EMPTY*/				{ $$ = NULL; }
+		;
+
+tablesample_entry:
+	opt_sample_func '(' sample_count ')' opt_repeatable_clause
+				{
+					$$ = makeSampleOptions($3, $1, $5, @1);
+				}
+	| sample_count
+		{
+			$$ = makeSampleOptions($1, NULL, -1, @1);
+		}
+	| sample_count '(' ColId ')'
+		{
+			$$ = makeSampleOptions($1, $3, -1, @1);
+		}
+	| sample_count '(' ColId ',' ICONST ')'
+		{
+			$$ = makeSampleOptions($1, $3, $5, @1);
+		}
+	;
+
+tablesample_clause:
+			TABLESAMPLE tablesample_entry
+				{
+					$$ = $2;
+				}
+		;
+
+opt_tablesample_clause:
+			tablesample_clause			{ $$ = $1; }
+			| /*EMPTY*/					{ $$ = NULL; }
+		;
+
+
+opt_repeatable_clause:
+			REPEATABLE '(' ICONST ')'	{ $$ = $3; }
+			| /*EMPTY*/					{ $$ = -1; }
+		;
+
 select_limit_value:
 			a_expr									{ $$ = $1; }
 			| ALL
@@ -457,6 +551,12 @@ select_limit_value:
 					/* LIMIT ALL is represented as a NULL constant */
 					$$ = makeNullAConst(@1);
 				}
+			| a_expr '%'
+				{ $$ = makeLimitPercent($1); }
+			| FCONST PERCENT
+				{ $$ = makeLimitPercent(makeFloatConst($1,@1)); }
+			| ICONST PERCENT
+				{ $$ = makeLimitPercent(makeIntConst($1,@1)); }
 		;
 
 select_offset_value:
@@ -535,6 +635,9 @@ group_by_list:
 group_by_item:
 			a_expr									{ $$ = $1; }
 			| empty_grouping_set					{ $$ = $1; }
+			| cube_clause							{ $$ = $1; }
+			| rollup_clause							{ $$ = $1; }
+			| grouping_sets_clause					{ $$ = $1; }
 		;
 
 empty_grouping_set:
@@ -550,8 +653,39 @@ empty_grouping_set:
  * unreserved_keyword rule.
  */
 
+rollup_clause:
+			ROLLUP '(' expr_list ')'
+				{
+					$$ = (PGNode *) makeGroupingSet(GROUPING_SET_ROLLUP, $3, @1);
+				}
+		;
+
+cube_clause:
+			CUBE '(' expr_list ')'
+				{
+					$$ = (PGNode *) makeGroupingSet(GROUPING_SET_CUBE, $3, @1);
+				}
+		;
+
+grouping_sets_clause:
+			GROUPING SETS '(' group_by_list ')'
+				{
+					$$ = (PGNode *) makeGroupingSet(GROUPING_SET_SETS, $4, @1);
+				}
+		;
+
+grouping_or_grouping_id:
+		GROUPING								{ $$ = NULL; }
+		| GROUPING_ID							{ $$ = NULL; }
+		;
+
 having_clause:
 			HAVING a_expr							{ $$ = $2; }
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+qualify_clause:
+			QUALIFY a_expr							{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -642,24 +776,18 @@ from_list:
 /*
  * table_ref is where an alias clause can be attached.
  */
-table_ref:	relation_expr opt_alias_clause
+table_ref:	relation_expr opt_alias_clause opt_tablesample_clause
 				{
 					$1->alias = $2;
+					$1->sample = $3;
 					$$ = (PGNode *) $1;
 				}
-			| relation_expr opt_alias_clause tablesample_clause
-				{
-					PGRangeTableSample *n = (PGRangeTableSample *) $3;
-					$1->alias = $2;
-					/* relation_expr goes inside the PGRangeTableSample node */
-					n->relation = (PGNode *) $1;
-					$$ = (PGNode *) n;
-				}
-			| func_table func_alias_clause
+			| func_table func_alias_clause opt_tablesample_clause
 				{
 					PGRangeFunction *n = (PGRangeFunction *) $1;
 					n->alias = (PGAlias*) linitial($2);
 					n->coldeflist = (PGList*) lsecond($2);
+					n->sample = $3;
 					$$ = (PGNode *) n;
 				}
 			| LATERAL_P func_table func_alias_clause
@@ -670,39 +798,13 @@ table_ref:	relation_expr opt_alias_clause
 					n->coldeflist = (PGList*) lsecond($3);
 					$$ = (PGNode *) n;
 				}
-			| select_with_parens opt_alias_clause
+			| select_with_parens opt_alias_clause opt_tablesample_clause
 				{
 					PGRangeSubselect *n = makeNode(PGRangeSubselect);
 					n->lateral = false;
 					n->subquery = $1;
 					n->alias = $2;
-					/*
-					 * The SQL spec does not permit a subselect
-					 * (<derived_table>) without an alias clause,
-					 * so we don't either.  This avoids the problem
-					 * of needing to invent a unique refname for it.
-					 * That could be surmounted if there's sufficient
-					 * popular demand, but for now let's just implement
-					 * the spec and see if anyone complains.
-					 * However, it does seem like a good idea to emit
-					 * an error message that's better than "syntax error".
-					 */
-					if ($2 == NULL)
-					{
-						if (IsA($1, PGSelectStmt) &&
-							((PGSelectStmt *) $1)->valuesLists)
-							ereport(ERROR,
-									(errcode(PG_ERRCODE_SYNTAX_ERROR),
-									 errmsg("VALUES in FROM must have an alias"),
-									 errhint("For example, FROM (VALUES ...) [AS] foo."),
-									 parser_errposition(@1)));
-						else
-							ereport(ERROR,
-									(errcode(PG_ERRCODE_SYNTAX_ERROR),
-									 errmsg("subquery in FROM must have an alias"),
-									 errhint("For example, FROM (SELECT ...) [AS] foo."),
-									 parser_errposition(@1)));
-					}
+					n->sample = $3;
 					$$ = (PGNode *) n;
 				}
 			| LATERAL_P select_with_parens opt_alias_clause
@@ -711,23 +813,7 @@ table_ref:	relation_expr opt_alias_clause
 					n->lateral = true;
 					n->subquery = $2;
 					n->alias = $3;
-					/* same comment as above */
-					if ($3 == NULL)
-					{
-						if (IsA($2, PGSelectStmt) &&
-							((PGSelectStmt *) $2)->valuesLists)
-							ereport(ERROR,
-									(errcode(PG_ERRCODE_SYNTAX_ERROR),
-									 errmsg("VALUES in FROM must have an alias"),
-									 errhint("For example, FROM (VALUES ...) [AS] foo."),
-									 parser_errposition(@2)));
-						else
-							ereport(ERROR,
-									(errcode(PG_ERRCODE_SYNTAX_ERROR),
-									 errmsg("subquery in FROM must have an alias"),
-									 errhint("For example, FROM (SELECT ...) [AS] foo."),
-									 parser_errposition(@2)));
-					}
+					n->sample = NULL;
 					$$ = (PGNode *) n;
 				}
 			| joined_table
@@ -774,6 +860,7 @@ joined_table:
 					n->rarg = $4;
 					n->usingClause = NIL;
 					n->quals = NULL;
+					n->location = @2;
 					$$ = n;
 				}
 			| table_ref join_type JOIN table_ref join_qual
@@ -787,6 +874,7 @@ joined_table:
 						n->usingClause = (PGList *) $5; /* USING clause */
 					else
 						n->quals = $5; /* ON clause */
+					n->location = @2;
 					$$ = n;
 				}
 			| table_ref JOIN table_ref join_qual
@@ -801,6 +889,7 @@ joined_table:
 						n->usingClause = (PGList *) $4; /* USING clause */
 					else
 						n->quals = $4; /* ON clause */
+					n->location = @2;
 					$$ = n;
 				}
 			| table_ref NATURAL join_type JOIN table_ref
@@ -812,6 +901,7 @@ joined_table:
 					n->rarg = $5;
 					n->usingClause = NIL; /* figure out which columns later... */
 					n->quals = NULL; /* fill later */
+					n->location = @2;
 					$$ = n;
 				}
 			| table_ref NATURAL JOIN table_ref
@@ -824,6 +914,7 @@ joined_table:
 					n->rarg = $4;
 					n->usingClause = NIL; /* figure out which columns later... */
 					n->quals = NULL; /* fill later */
+					n->location = @2;
 					$$ = n;
 				}
 		;
@@ -835,7 +926,7 @@ alias_clause:
 					$$->aliasname = $2;
 					$$->colnames = $4;
 				}
-			| AS ColId
+			| AS ColIdOrString
 				{
 					$$ = makeNode(PGAlias);
 					$$->aliasname = $2;
@@ -954,26 +1045,6 @@ relation_expr:
  * has, causing the parser to prefer to reduce, in effect assuming that the
  * SET is not an alias.
  */
-/*
- * TABLESAMPLE decoration in a FROM item
- */
-tablesample_clause:
-			TABLESAMPLE func_name '(' expr_list ')' opt_repeatable_clause
-				{
-					PGRangeTableSample *n = makeNode(PGRangeTableSample);
-					/* n->relation will be filled in later */
-					n->method = $2;
-					n->args = $4;
-					n->repeatable = $6;
-					n->location = @2;
-					$$ = (PGNode *) n;
-				}
-		;
-
-opt_repeatable_clause:
-			REPEATABLE '(' a_expr ')'	{ $$ = (PGNode *) $3; }
-			| /*EMPTY*/					{ $$ = NULL; }
-		;
 
 /*
  * func_table represents a function invocation in a FROM list. It can be
@@ -994,6 +1065,7 @@ func_table: func_expr_windowless opt_ordinality
 					n->ordinality = $2;
 					n->is_rowsfrom = false;
 					n->functions = list_make1(list_make2($1, NIL));
+					n->sample = NULL;
 					/* alias and coldeflist are set by table_ref production */
 					$$ = (PGNode *) n;
 				}
@@ -1004,6 +1076,7 @@ func_table: func_expr_windowless opt_ordinality
 					n->ordinality = $6;
 					n->is_rowsfrom = true;
 					n->functions = $4;
+					n->sample = NULL;
 					/* alias and coldeflist are set by table_ref production */
 					$$ = (PGNode *) n;
 				}
@@ -1085,6 +1158,16 @@ opt_collate_clause:
  *
  *****************************************************************************/
 
+colid_type_list:
+            ColId Typename   {
+             $$ = list_make1(list_make2(makeString($1), $2));
+            }
+            | colid_type_list ',' ColId Typename {
+             $$ = lappend($1, list_make2(makeString($3), $4));
+            }
+
+RowOrStruct: ROW | STRUCT
+
 Typename:	SimpleTypename opt_array_bounds
 				{
 					$$ = $1;
@@ -1119,6 +1202,18 @@ Typename:	SimpleTypename opt_array_bounds
 					$$->arrayBounds = list_make1(makeInteger(-1));
 					$$->setof = true;
 				}
+			| RowOrStruct '(' colid_type_list ')' opt_array_bounds {
+               $$ = SystemTypeName("struct");
+               $$->arrayBounds = $5;
+               $$->typmods = $3;
+               $$->location = @1;
+               }
+            | MAP '(' type_list ')' opt_array_bounds {
+               $$ = SystemTypeName("map");
+               $$->arrayBounds = $5;
+               $$->typmods = $3;
+               $$->location = @1;
+			}
 		;
 
 opt_array_bounds:
@@ -1175,18 +1270,18 @@ ConstTypename:
  * constants for them.
  */
 GenericType:
-			type_function_name opt_type_modifiers
+			type_name_token opt_type_modifiers
 				{
 					$$ = makeTypeName($1);
 					$$->typmods = $2;
 					$$->location = @1;
 				}
-			| type_function_name attrs opt_type_modifiers
-				{
-					$$ = makeTypeNameFromNameList(lcons(makeString($1), $2));
-					$$->typmods = $3;
-					$$->location = @1;
-				}
+			// | type_name_token attrs opt_type_modifiers
+			// 	{
+			// 		$$ = makeTypeNameFromNameList(lcons(makeString($1), $2));
+			// 		$$->typmods = $3;
+			// 		$$->location = @1;
+			// 	}
 		;
 
 opt_type_modifiers: '(' expr_list ')'				{ $$ = $2; }
@@ -1279,7 +1374,7 @@ opt_float:	'(' Iconst ')'
 				}
 			| /*EMPTY*/
 				{
-					$$ = SystemTypeName("float8");
+					$$ = SystemTypeName("float4");
 				}
 		;
 
@@ -1462,77 +1557,89 @@ opt_timezone:
 			| /*EMPTY*/								{ $$ = false; }
 		;
 
+year_keyword:
+	YEAR_P | YEARS_P
+
+month_keyword:
+	MONTH_P | MONTHS_P
+
+day_keyword:
+	DAY_P | DAYS_P
+
+hour_keyword:
+	HOUR_P | HOURS_P
+
+minute_keyword:
+	MINUTE_P | MINUTES_P
+
+second_keyword:
+	SECOND_P | SECONDS_P
+
+millisecond_keyword:
+	MILLISECOND_P | MILLISECONDS_P
+
+microsecond_keyword:
+	MICROSECOND_P | MICROSECONDS_P
+
 opt_interval:
-			YEAR_P
+			year_keyword
 				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(YEAR), @1)); }
-			| MONTH_P
+			| month_keyword
 				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(MONTH), @1)); }
-			| DAY_P
+			| day_keyword
 				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(DAY), @1)); }
-			| HOUR_P
+			| hour_keyword
 				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(HOUR), @1)); }
-			| MINUTE_P
+			| minute_keyword
 				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(MINUTE), @1)); }
-			| interval_second
-				{ $$ = $1; }
-			| YEAR_P TO MONTH_P
+			| second_keyword
+				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(SECOND), @1)); }
+			| millisecond_keyword
+				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(MILLISECOND), @1)); }
+			| microsecond_keyword
+				{ $$ = list_make1(makeIntConst(INTERVAL_MASK(MICROSECOND), @1)); }
+			| year_keyword TO month_keyword
 				{
 					$$ = list_make1(makeIntConst(INTERVAL_MASK(YEAR) |
 												 INTERVAL_MASK(MONTH), @1));
 				}
-			| DAY_P TO HOUR_P
+			| day_keyword TO hour_keyword
 				{
 					$$ = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
 												 INTERVAL_MASK(HOUR), @1));
 				}
-			| DAY_P TO MINUTE_P
+			| day_keyword TO minute_keyword
 				{
 					$$ = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
 												 INTERVAL_MASK(HOUR) |
 												 INTERVAL_MASK(MINUTE), @1));
 				}
-			| DAY_P TO interval_second
+			| day_keyword TO second_keyword
 				{
-					$$ = $3;
-					linitial($$) = makeIntConst(INTERVAL_MASK(DAY) |
-												INTERVAL_MASK(HOUR) |
-												INTERVAL_MASK(MINUTE) |
-												INTERVAL_MASK(SECOND), @1);
+					$$ = list_make1(makeIntConst(INTERVAL_MASK(DAY) |
+												 INTERVAL_MASK(HOUR) |
+												 INTERVAL_MASK(MINUTE) |
+												 INTERVAL_MASK(SECOND), @1));
 				}
-			| HOUR_P TO MINUTE_P
+			| hour_keyword TO minute_keyword
 				{
 					$$ = list_make1(makeIntConst(INTERVAL_MASK(HOUR) |
 												 INTERVAL_MASK(MINUTE), @1));
 				}
-			| HOUR_P TO interval_second
+			| hour_keyword TO second_keyword
 				{
-					$$ = $3;
-					linitial($$) = makeIntConst(INTERVAL_MASK(HOUR) |
-												INTERVAL_MASK(MINUTE) |
-												INTERVAL_MASK(SECOND), @1);
+					$$ = list_make1(makeIntConst(INTERVAL_MASK(HOUR) |
+												 INTERVAL_MASK(MINUTE) |
+												 INTERVAL_MASK(SECOND), @1));
 				}
-			| MINUTE_P TO interval_second
+			| minute_keyword TO second_keyword
 				{
-					$$ = $3;
-					linitial($$) = makeIntConst(INTERVAL_MASK(MINUTE) |
-												INTERVAL_MASK(SECOND), @1);
+					$$ = list_make1(makeIntConst(INTERVAL_MASK(MINUTE) |
+												 INTERVAL_MASK(SECOND), @1));
 				}
 			| /*EMPTY*/
 				{ $$ = NIL; }
 		;
-
-interval_second:
-			SECOND_P
-				{
-					$$ = list_make1(makeIntConst(INTERVAL_MASK(SECOND), @1));
-				}
-			| SECOND_P '(' Iconst ')'
-				{
-					$$ = list_make2(makeIntConst(INTERVAL_MASK(SECOND), @1),
-									makeIntConst($3, @3));
-				}
-		;
-
 
 /*****************************************************************************
  *
@@ -1563,8 +1670,9 @@ interval_second:
  * you expect!  So we use %prec annotations freely to set precedences.
  */
 a_expr:		c_expr									{ $$ = $1; }
-			| a_expr TYPECAST Typename
-					{ $$ = makeTypeCast($1, $3, @2); }
+			|
+			a_expr TYPECAST Typename
+					{ $$ = makeTypeCast($1, $3, 0, @2); }
 			| a_expr COLLATE any_name
 				{
 					PGCollateClause *n = makeNode(PGCollateClause);
@@ -1633,6 +1741,11 @@ a_expr:		c_expr									{ $$ = $1; }
 			| NOT_LA a_expr						%prec NOT
 				{ $$ = makeNotExpr($2, @1); }
 
+			| a_expr GLOB a_expr %prec GLOB
+				{
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_GLOB, "~~~",
+												   $1, $3, @2);
+				}
 			| a_expr LIKE a_expr
 				{
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_LIKE, "~~",
@@ -1641,10 +1754,9 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr LIKE a_expr ESCAPE a_expr					%prec LIKE
 				{
 					PGFuncCall *n = makeFuncCall(SystemFuncName("like_escape"),
-											   list_make2($3, $5),
+											   list_make3($1, $3, $5),
 											   @2);
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_LIKE, "~~",
-												   $1, (PGNode *) n, @2);
+					$$ = (PGNode *) n;
 				}
 			| a_expr NOT_LA LIKE a_expr							%prec NOT_LA
 				{
@@ -1653,11 +1765,10 @@ a_expr:		c_expr									{ $$ = $1; }
 				}
 			| a_expr NOT_LA LIKE a_expr ESCAPE a_expr			%prec NOT_LA
 				{
-					PGFuncCall *n = makeFuncCall(SystemFuncName("like_escape"),
-											   list_make2($4, $6),
+					PGFuncCall *n = makeFuncCall(SystemFuncName("not_like_escape"),
+											   list_make3($1, $4, $6),
 											   @2);
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_LIKE, "!~~",
-												   $1, (PGNode *) n, @2);
+					$$ = (PGNode *) n;
 				}
 			| a_expr ILIKE a_expr
 				{
@@ -1679,7 +1790,7 @@ a_expr:		c_expr									{ $$ = $1; }
 				}
 			| a_expr NOT_LA ILIKE a_expr ESCAPE a_expr			%prec NOT_LA
 				{
-					PGFuncCall *n = makeFuncCall(SystemFuncName("like_escape"),
+					PGFuncCall *n = makeFuncCall(SystemFuncName("not_like_escape"),
 											   list_make2($4, $6),
 											   @2);
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_ILIKE, "!~~*",
@@ -1768,6 +1879,34 @@ a_expr:		c_expr									{ $$ = $1; }
 					n->location = @2;
 					$$ = (PGNode *)n;
 				}
+			| row {
+				PGFuncCall *n = makeFuncCall(SystemFuncName("row"), $1, @1);
+				$$ = (PGNode *) n;
+			}
+			| '{' dict_arguments '}' {
+				PGFuncCall *n = makeFuncCall(SystemFuncName("struct_pack"), $2, @2);
+				$$ = (PGNode *) n;
+			}
+			| '[' opt_expr_list ']' {
+				PGFuncCall *n = makeFuncCall(SystemFuncName("list_value"), $2, @2);
+				$$ = (PGNode *) n;
+			}
+			| row LAMBDA_ARROW a_expr
+			{
+				PGLambdaFunction *n = makeNode(PGLambdaFunction);
+				n->parameters = $1;
+				n->function = $3;
+				n->location = @2;
+				$$ = (PGNode *) n;
+			}
+			| columnref LAMBDA_ARROW a_expr
+			{
+				PGLambdaFunction *n = makeNode(PGLambdaFunction);
+				n->parameters = list_make1($1);
+				n->function = $3;
+				n->location = @2;
+				$$ = (PGNode *) n;
+			}
 			| row OVERLAPS row
 				{
 					if (list_length($1) != 2)
@@ -1954,6 +2093,11 @@ a_expr:		c_expr									{ $$ = $1; }
 					n->location = @1;
 					$$ = (PGNode *)n;
 				}
+			| ARRAY '[' opt_expr_list ']' {
+				PGList *func_name = list_make1(makeString("construct_array"));
+				PGFuncCall *n = makeFuncCall(func_name, $3, @1);
+				$$ = (PGNode *) n;
+			}
 		;
 
 /*
@@ -1968,7 +2112,7 @@ a_expr:		c_expr									{ $$ = $1; }
 b_expr:		c_expr
 				{ $$ = $1; }
 			| b_expr TYPECAST Typename
-				{ $$ = makeTypeCast($1, $3, @2); }
+				{ $$ = makeTypeCast($1, $3, 0, @2); }
 			| '+' b_expr					%prec UMINUS
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "+", NULL, $2, @1); }
 			| '-' b_expr					%prec UMINUS
@@ -2031,6 +2175,13 @@ b_expr:		c_expr
  */
 c_expr:		columnref								{ $$ = $1; }
 			| AexprConst							{ $$ = $1; }
+			| '#' ICONST
+				{
+					PGPositionalReference *n = makeNode(PGPositionalReference);
+					n->position = $2;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
 			| '?' opt_indirection
 				{
 					if ($2)
@@ -2072,8 +2223,18 @@ c_expr:		columnref								{ $$ = $1; }
 				}
 			| case_expr
 				{ $$ = $1; }
-			| func_expr
-				{ $$ = $1; }
+			| func_expr opt_indirection
+				{
+					if ($2) {
+						PGAIndirection *n = makeNode(PGAIndirection);
+						n->arg = $1;
+						n->indirection = check_indirection($2, yyscanner);
+						$$ = (PGNode *)n;
+					}
+					else {
+						$$ = $1;
+					}
+				}
 			| select_with_parens			%prec UMINUS
 				{
 					PGSubLink *n = makeNode(PGSubLink);
@@ -2120,46 +2281,58 @@ c_expr:		columnref								{ $$ = $1; }
 					n->location = @1;
 					$$ = (PGNode *)n;
 				}
+			| grouping_or_grouping_id '(' expr_list ')'
+			  {
+				  PGGroupingFunc *g = makeNode(PGGroupingFunc);
+				  g->args = $3;
+				  g->location = @1;
+				  $$ = (PGNode *)g;
+			  }
 		;
 
 func_application: func_name '(' ')'
 				{
 					$$ = (PGNode *) makeFuncCall($1, NIL, @1);
 				}
-			| func_name '(' func_arg_list opt_sort_clause ')'
+			| func_name '(' func_arg_list opt_sort_clause opt_ignore_nulls ')'
 				{
 					PGFuncCall *n = makeFuncCall($1, $3, @1);
 					n->agg_order = $4;
+					n->agg_ignore_nulls = $5;
 					$$ = (PGNode *)n;
 				}
-			| func_name '(' VARIADIC func_arg_expr opt_sort_clause ')'
+			| func_name '(' VARIADIC func_arg_expr opt_sort_clause opt_ignore_nulls ')'
 				{
 					PGFuncCall *n = makeFuncCall($1, list_make1($4), @1);
 					n->func_variadic = true;
 					n->agg_order = $5;
+					n->agg_ignore_nulls = $6;
 					$$ = (PGNode *)n;
 				}
-			| func_name '(' func_arg_list ',' VARIADIC func_arg_expr opt_sort_clause ')'
+			| func_name '(' func_arg_list ',' VARIADIC func_arg_expr opt_sort_clause opt_ignore_nulls ')'
 				{
 					PGFuncCall *n = makeFuncCall($1, lappend($3, $6), @1);
 					n->func_variadic = true;
 					n->agg_order = $7;
+					n->agg_ignore_nulls = $8;
 					$$ = (PGNode *)n;
 				}
-			| func_name '(' ALL func_arg_list opt_sort_clause ')'
+			| func_name '(' ALL func_arg_list opt_sort_clause opt_ignore_nulls ')'
 				{
 					PGFuncCall *n = makeFuncCall($1, $4, @1);
 					n->agg_order = $5;
+					n->agg_ignore_nulls = $6;
 					/* Ideally we'd mark the PGFuncCall node to indicate
 					 * "must be an aggregate", but there's no provision
 					 * for that in PGFuncCall at the moment.
 					 */
 					$$ = (PGNode *)n;
 				}
-			| func_name '(' DISTINCT func_arg_list opt_sort_clause ')'
+			| func_name '(' DISTINCT func_arg_list opt_sort_clause opt_ignore_nulls ')'
 				{
 					PGFuncCall *n = makeFuncCall($1, $4, @1);
 					n->agg_order = $5;
+					n->agg_ignore_nulls = $6;
 					n->agg_distinct = true;
 					$$ = (PGNode *)n;
 				}
@@ -2312,7 +2485,9 @@ func_expr_common_subexpr:
 					$$ = makeSQLValueFunction(PG_SVFOP_CURRENT_SCHEMA, -1, @1);
 				}
 			| CAST '(' a_expr AS Typename ')'
-				{ $$ = makeTypeCast($3, $5, @1); }
+				{ $$ = makeTypeCast($3, $5, 0, @1); }
+			| TRY_CAST '(' a_expr AS Typename ')'
+				{ $$ = makeTypeCast($3, $5, 1, @1); }
 			| EXTRACT '(' extract_list ')'
 				{
 					$$ = (PGNode *) makeFuncCall(SystemFuncName("date_part"), $3, @1);
@@ -2358,7 +2533,7 @@ func_expr_common_subexpr:
 					/* various trim expressions are defined in SQL
 					 * - thomas 1997-07-19
 					 */
-					$$ = (PGNode *) makeFuncCall(SystemFuncName("btrim"), $4, @1);
+					$$ = (PGNode *) makeFuncCall(SystemFuncName("trim"), $4, @1);
 				}
 			| TRIM '(' LEADING trim_list ')'
 				{
@@ -2370,7 +2545,7 @@ func_expr_common_subexpr:
 				}
 			| TRIM '(' trim_list ')'
 				{
-					$$ = (PGNode *) makeFuncCall(SystemFuncName("btrim"), $3, @1);
+					$$ = (PGNode *) makeFuncCall(SystemFuncName("trim"), $3, @1);
 				}
 			| NULLIF '(' a_expr ',' a_expr ')'
 				{
@@ -2382,22 +2557,6 @@ func_expr_common_subexpr:
 					c->args = $3;
 					c->location = @1;
 					$$ = (PGNode *)c;
-				}
-			| GREATEST '(' expr_list ')'
-				{
-					PGMinMaxExpr *v = makeNode(PGMinMaxExpr);
-					v->args = $3;
-					v->op = PG_IS_GREATEST;
-					v->location = @1;
-					$$ = (PGNode *)v;
-				}
-			| LEAST '(' expr_list ')'
-				{
-					PGMinMaxExpr *v = makeNode(PGMinMaxExpr);
-					v->args = $3;
-					v->op = IS_LEAST;
-					v->location = @1;
-					$$ = (PGNode *)v;
 				}
 		;
 
@@ -2505,18 +2664,6 @@ opt_frame_clause:
 				{
 					PGWindowDef *n = $2;
 					n->frameOptions |= FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE;
-					if (n->frameOptions & (FRAMEOPTION_START_VALUE_PRECEDING |
-										   FRAMEOPTION_END_VALUE_PRECEDING))
-						ereport(ERROR,
-								(errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("RANGE PRECEDING is only supported with UNBOUNDED"),
-								 parser_errposition(@1)));
-					if (n->frameOptions & (FRAMEOPTION_START_VALUE_FOLLOWING |
-										   FRAMEOPTION_END_VALUE_FOLLOWING))
-						ereport(ERROR,
-								(errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("RANGE FOLLOWING is only supported with UNBOUNDED"),
-								 parser_errposition(@1)));
 					$$ = n;
 				}
 			| ROWS frame_extent
@@ -2650,10 +2797,27 @@ frame_bound:
  * without conflicting with the parenthesized a_expr production.  Without the
  * ROW keyword, there must be more than one a_expr inside the parens.
  */
-row:		ROW '(' expr_list ')'					{ $$ = $3; }
+qualified_row:	ROW '(' expr_list ')'					{ $$ = $3; }
 			| ROW '(' ')'							{ $$ = NIL; }
+		;
+
+row:		qualified_row							{ $$ = $1;}
 			| '(' expr_list ',' a_expr ')'			{ $$ = lappend($2, $4); }
 		;
+
+dict_arg:
+	ColIdOrString ':' a_expr						{
+		PGNamedArgExpr *na = makeNode(PGNamedArgExpr);
+		na->name = $1;
+		na->arg = (PGExpr *) $3;
+		na->argnumber = -1;
+		na->location = @1;
+		$$ = (PGNode *) na;
+	}
+
+dict_arguments:
+	dict_arg						{ $$ = list_make1($1); }
+	| dict_arguments ',' dict_arg	{ $$ = lappend($1, $3); }
 
 sub_type:	ANY										{ $$ = PG_ANY_SUBLINK; }
 			| SOME									{ $$ = PG_ANY_SUBLINK; }
@@ -2700,6 +2864,10 @@ subquery_Op:
 					{ $$ = list_make1(makeString("~~")); }
 			| NOT_LA LIKE
 					{ $$ = list_make1(makeString("!~~")); }
+			| GLOB
+					{ $$ = list_make1(makeString("~~~")); }
+			| NOT_LA GLOB
+					{ $$ = list_make1(makeString("!~~~")); }
 			| ILIKE
 					{ $$ = list_make1(makeString("~~*")); }
 			| NOT_LA ILIKE
@@ -2731,6 +2899,18 @@ expr_list:	a_expr
 					$$ = lappend($1, $3);
 				}
 		;
+
+opt_expr_list:
+			expr_list
+				{
+					$$ = $1;
+				}
+			| /* empty */
+				{
+					$$ = NULL;
+				}
+		;
+
 
 /* function arguments can have names */
 func_arg_list:  func_arg_expr
@@ -2783,14 +2963,16 @@ extract_list:
  * - thomas 2001-04-12
  */
 extract_arg:
-			IDENT									{ $$ = $1; }
-			| YEAR_P								{ $$ = (char*) "year"; }
-			| MONTH_P								{ $$ = (char*) "month"; }
-			| DAY_P									{ $$ = (char*) "day"; }
-			| HOUR_P								{ $$ = (char*) "hour"; }
-			| MINUTE_P								{ $$ = (char*) "minute"; }
-			| SECOND_P								{ $$ = (char*) "second"; }
-			| Sconst								{ $$ = $1; }
+			IDENT											{ $$ = $1; }
+			| year_keyword									{ $$ = (char*) "year"; }
+			| month_keyword									{ $$ = (char*) "month"; }
+			| day_keyword									{ $$ = (char*) "day"; }
+			| hour_keyword									{ $$ = (char*) "hour"; }
+			| minute_keyword								{ $$ = (char*) "minute"; }
+			| second_keyword								{ $$ = (char*) "second"; }
+			| millisecond_keyword							{ $$ = (char*) "millisecond"; }
+			| microsecond_keyword							{ $$ = (char*) "microsecond"; }
+			| Sconst										{ $$ = $1; }
 		;
 
 /* OVERLAY() arguments
@@ -2861,7 +3043,7 @@ substr_list:
 					 */
 					$$ = list_make3($1, makeIntConst(1, -1),
 									makeTypeCast($2,
-												 SystemTypeName("int4"), -1));
+												 SystemTypeName("int4"), 0, -1));
 				}
 			| expr_list
 				{
@@ -2953,10 +3135,6 @@ indirection_el:
 				{
 					$$ = (PGNode *) makeString($2);
 				}
-			| '.' '*'
-				{
-					$$ = (PGNode *) makeNode(PGAStar);
-				}
 			| '[' a_expr ']'
 				{
 					PGAIndices *ai = makeNode(PGAIndices);
@@ -3010,7 +3188,7 @@ target_list:
 			| target_list ',' target_el				{ $$ = lappend($1, $3); }
 		;
 
-target_el:	a_expr AS ColLabel
+target_el:	a_expr AS ColLabelOrString
 				{
 					$$ = makeNode(PGResTarget);
 					$$->name = $3;
@@ -3042,11 +3220,30 @@ target_el:	a_expr AS ColLabel
 					$$->val = (PGNode *)$1;
 					$$->location = @1;
 				}
-			| '*'
+			| '*' opt_except_list opt_replace_list
 				{
 					PGColumnRef *n = makeNode(PGColumnRef);
-					n->fields = list_make1(makeNode(PGAStar));
+					PGAStar *star = makeNode(PGAStar);
+					n->fields = list_make1(star);
 					n->location = @1;
+					star->except_list = $2;
+					star->replace_list = $3;
+
+					$$ = makeNode(PGResTarget);
+					$$->name = NULL;
+					$$->indirection = NIL;
+					$$->val = (PGNode *)n;
+					$$->location = @1;
+				}
+			| ColId '.' '*' opt_except_list opt_replace_list
+				{
+					PGColumnRef *n = makeNode(PGColumnRef);
+					PGAStar *star = makeNode(PGAStar);
+					n->fields = list_make1(star);
+					n->location = @1;
+					star->relation = $1;
+					star->except_list = $4;
+					star->replace_list = $5;
 
 					$$ = makeNode(PGResTarget);
 					$$->name = NULL;
@@ -3056,6 +3253,26 @@ target_el:	a_expr AS ColLabel
 				}
 		;
 
+except_list: EXCLUDE '(' name_list ')'					{ $$ = $3; }
+			| EXCLUDE ColId								{ $$ = list_make1(makeString($2)); }
+		;
+
+opt_except_list: except_list						{ $$ = $1; }
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+replace_list_el: a_expr AS ColId					{ $$ = list_make2($1, makeString($3)); }
+		;
+
+replace_list:
+			replace_list_el							{ $$ = list_make1($1); }
+			| replace_list ',' replace_list_el		{ $$ = lappend($1, $3); }
+		;
+
+opt_replace_list: REPLACE '(' replace_list ')'		{ $$ = $3; }
+			| REPLACE replace_list_el				{ $$ = list_make1($2); }
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
 
 /*****************************************************************************
  *
@@ -3076,7 +3293,7 @@ qualified_name_list:
  * which may contain subscripts, and reject that case in the C code.
  */
 qualified_name:
-			ColId
+			ColIdOrString
 				{
 					$$ = makeRangeVar(NULL, $1, @1);
 				}
@@ -3126,9 +3343,10 @@ attr_name:	ColLabel								{ $$ = $1; };
  * may contain subscripts, and reject that case in the C code.  (If we
  * ever implement SQL99-like methods, such syntax may actually become legal!)
  */
-func_name:	type_function_name
+func_name:	function_name_token
 					{ $$ = list_make1(makeString($1)); }
-			| ColId indirection
+			|
+			ColId indirection
 					{
 						$$ = check_func_name(lcons(makeString($1), $2),
 											 yyscanner);
@@ -3147,9 +3365,17 @@ AexprConst: Iconst
 				{
 					$$ = makeFloatConst($1, @1);
 				}
-			| Sconst
+			| Sconst opt_indirection
 				{
-					$$ = makeStringConst($1, @1);
+					if ($2)
+					{
+						PGAIndirection *n = makeNode(PGAIndirection);
+						n->arg = makeStringConst($1, @1);
+						n->indirection = check_indirection($2, yyscanner);
+						$$ = (PGNode *) n;
+					}
+					else
+						$$ = makeStringConst($1, @1);
 				}
 			| BCONST
 				{
@@ -3171,7 +3397,7 @@ AexprConst: Iconst
 					t->location = @1;
 					$$ = makeStringConstCast($2, @2, t);
 				}
-			| func_name '(' func_arg_list opt_sort_clause ')' Sconst
+			| func_name '(' func_arg_list opt_sort_clause opt_ignore_nulls ')' Sconst
 				{
 					/* generic syntax with a type modifier */
 					PGTypeName *t = makeTypeNameFromNameList($1);
@@ -3181,7 +3407,7 @@ AexprConst: Iconst
 					 * We must use func_arg_list and opt_sort_clause in the
 					 * production to avoid reduce/reduce conflicts, but we
 					 * don't actually wish to allow PGNamedArgExpr in this
-					 * context, nor ORDER BY.
+					 * context, ORDER BY, nor IGNORE NULLS.
 					 */
 					foreach(lc, $3)
 					{
@@ -3198,40 +3424,32 @@ AexprConst: Iconst
 									(errcode(PG_ERRCODE_SYNTAX_ERROR),
 									 errmsg("type modifier cannot have ORDER BY"),
 									 parser_errposition(@4)));
+					if ($5 != false)
+							ereport(ERROR,
+									(errcode(PG_ERRCODE_SYNTAX_ERROR),
+									 errmsg("type modifier cannot have IGNORE NULLS"),
+									 parser_errposition(@5)));
+
 
 					t->typmods = $3;
 					t->location = @1;
-					$$ = makeStringConstCast($6, @6, t);
+					$$ = makeStringConstCast($7, @7, t);
 				}
 			| ConstTypename Sconst
 				{
 					$$ = makeStringConstCast($2, @2, $1);
 				}
+			| ConstInterval '(' a_expr ')' opt_interval
+				{
+					$$ = makeIntervalNode($3, @3, $5);
+				}
+			| ConstInterval Iconst opt_interval
+				{
+					$$ = makeIntervalNode($2, @2, $3);
+				}
 			| ConstInterval Sconst opt_interval
 				{
-					PGTypeName *t = $1;
-					t->typmods = $3;
-					$$ = makeStringConstCast($2, @2, t);
-				}
-			| ConstInterval '(' Iconst ')' Sconst
-				{
-					PGTypeName *t = $1;
-					t->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
-											makeIntConst($3, @3));
-					$$ = makeStringConstCast($5, @5, t);
-				}
-      /* Version without () is handled in a_expr/b_expr logic due to ? mis-parsing as operator */
-			| ConstInterval '(' '?' ')' '?' opt_interval
-				{
-					PGTypeName *t = $1;
-					if ($6 != NIL)
-					{
-						t->typmods = lappend($6, makeParamRef(0, @3));
-					}
-					else
-						t->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
-												makeParamRef(0, @3));
-					$$ = makeParamRefCast(0, @5, t);
+					$$ = makeIntervalNode($2, @2, $3);
 				}
 			| TRUE_P
 				{
@@ -3269,11 +3487,26 @@ ColId:		IDENT									{ $$ = $1; }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 		;
 
+ColIdOrString:	ColId											{ $$ = $1; }
+				| SCONST										{ $$ = $1; }
+		;
+
+
 /* Type/function identifier --- names that can be type or function names.
  */
 type_function_name:	IDENT							{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
+		;
+
+function_name_token:	IDENT						{ $$ = $1; }
+			| unreserved_keyword					{ $$ = pstrdup($1); }
+			| func_name_keyword						{ $$ = pstrdup($1); }
+		;
+
+type_name_token:	IDENT						{ $$ = $1; }
+			| unreserved_keyword					{ $$ = pstrdup($1); }
+			| type_name_keyword						{ $$ = pstrdup($1); }
 		;
 
 any_name:	ColId						{ $$ = list_make1(makeString($1)); }
@@ -3300,8 +3533,11 @@ param_name:	type_function_name
  * This presently includes *all* Postgres keywords.
  */
 ColLabel:	IDENT									{ $$ = $1; }
+			| other_keyword							{ $$ = pstrdup($1); }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
-			| col_name_keyword						{ $$ = pstrdup($1); }
-			| type_func_name_keyword				{ $$ = pstrdup($1); }
 			| reserved_keyword						{ $$ = pstrdup($1); }
+		;
+
+ColLabelOrString:	ColLabel						{ $$ = $1; }
+					| SCONST						{ $$ = $1; }
 		;

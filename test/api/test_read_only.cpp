@@ -61,7 +61,9 @@ TEST_CASE("Test connection using a read only database", "[readonly]") {
 	REQUIRE_NO_FAIL(con->Query("CREATE TEMPORARY TABLE integers2(i INTEGER)"));
 	REQUIRE_NO_FAIL(con->Query("INSERT INTO integers2 VALUES (1), (2), (3), (4), (5)"));
 	REQUIRE_NO_FAIL(con->Query("UPDATE integers2 SET i=i+1"));
-	REQUIRE_NO_FAIL(con->Query("DELETE FROM integers2 WHERE i=3"));
+	result = con->Query("DELETE FROM integers2 WHERE i=3");
+	REQUIRE(CHECK_COLUMN(result, 0, {1}));
+
 	REQUIRE_NO_FAIL(con->Query("ALTER TABLE integers2 RENAME COLUMN i TO k"));
 	result = con->Query("SELECT k FROM integers2 ORDER BY 1");
 	REQUIRE(CHECK_COLUMN(result, 0, {2, 4, 5, 6}));
@@ -99,5 +101,29 @@ TEST_CASE("Test connection using a read only database", "[readonly]") {
 	// REQUIRE_THROWS(db2 = make_unique<DuckDB>(dbdir, true));
 	// db.reset();
 	// db2.reset();
+	DeleteDatabase(dbdir);
+}
+
+TEST_CASE("Test view creation using a read only database", "[readonly]") {
+	auto dbdir = TestCreatePath("read_only_view_test");
+	unique_ptr<DuckDB> db;
+	unique_ptr<Connection> con;
+	// make sure the database does not exist
+	DeleteDatabase(dbdir);
+
+	DBConfig readonly_config;
+	readonly_config.use_temporary_directory = false;
+	readonly_config.access_mode = AccessMode::READ_ONLY;
+
+	// create db in first place
+	{ auto db_rw = DuckDB(dbdir); }
+	db = make_unique<DuckDB>(dbdir, &readonly_config);
+	// create the database file and initialize it with data
+	con = make_unique<Connection>(*db);
+
+	REQUIRE_NOTHROW(con->TableFunction("duckdb_tables")->CreateView("boo", true, true));
+	con.reset();
+	db.reset();
+
 	DeleteDatabase(dbdir);
 }

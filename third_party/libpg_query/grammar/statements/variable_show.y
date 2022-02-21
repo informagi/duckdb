@@ -1,31 +1,58 @@
 /* allows SET or RESET without LOCAL */
 VariableShowStmt:
-			SHOW var_name
-				{
-					PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
-					n->name = $2;
-					$$ = (PGNode *) n;
-				}
-			| SHOW TIME ZONE
-				{
-					PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
-					n->name = (char*) "timezone";
-					$$ = (PGNode *) n;
-				}
-			| SHOW TRANSACTION ISOLATION LEVEL
-				{
-					PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
-					n->name = (char*) "transaction_isolation";
-					$$ = (PGNode *) n;
-				}
-			| SHOW ALL
-				{
-					PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
-					n->name = (char*) "all";
-					$$ = (PGNode *) n;
-				}
+			show_or_describe SelectStmt {
+				PGVariableShowSelectStmt *n = makeNode(PGVariableShowSelectStmt);
+				n->stmt = $2;
+				n->name = (char*) "select";
+				n->is_summary = 0;
+				$$ = (PGNode *) n;
+			}
+		 | SUMMARIZE SelectStmt {
+				PGVariableShowSelectStmt *n = makeNode(PGVariableShowSelectStmt);
+				n->stmt = $2;
+				n->name = (char*) "select";
+				n->is_summary = 1;
+				$$ = (PGNode *) n;
+			}
+		 | SUMMARIZE var_name
+			{
+				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
+				n->name = $2;
+				n->is_summary = 1;
+				$$ = (PGNode *) n;
+			}
+		 | show_or_describe var_name
+			{
+				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
+				n->name = $2;
+				n->is_summary = 0;
+				$$ = (PGNode *) n;
+			}
+		| show_or_describe TIME ZONE
+			{
+				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
+				n->name = (char*) "timezone";
+				n->is_summary = 0;
+				$$ = (PGNode *) n;
+			}
+		| show_or_describe TRANSACTION ISOLATION LEVEL
+			{
+				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
+				n->name = (char*) "transaction_isolation";
+				n->is_summary = 0;
+				$$ = (PGNode *) n;
+			}
+		| show_or_describe ALL
+			{
+				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);
+				n->name = (char*) "all";
+				n->is_summary = 0;
+				$$ = (PGNode *) n;
+			}
+
 		;
 
+show_or_describe: SHOW | DESCRIBE
 
 var_name:	ColId								{ $$ = $1; }
 			| var_name '.' ColId

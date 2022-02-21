@@ -1,29 +1,42 @@
 #include "duckdb/execution/operator/schema/physical_create_table.hpp"
 
-#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/storage/data_table.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-void PhysicalCreateTable::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) {
-	int64_t inserted_count = 0;
+PhysicalCreateTable::PhysicalCreateTable(LogicalOperator &op, SchemaCatalogEntry *schema,
+                                         unique_ptr<BoundCreateTableInfo> info, idx_t estimated_cardinality)
+    : PhysicalOperator(PhysicalOperatorType::CREATE_TABLE, op.types, estimated_cardinality), schema(schema),
+      info(move(info)) {
+}
 
-	auto table = (TableCatalogEntry *)schema->CreateTable(context, info.get());
-	if (table && children.size() > 0) {
-		while (true) {
-			children[0]->GetChunk(context, state->child_chunk, state->child_state.get());
-			if (state->child_chunk.size() == 0) {
-				break;
-			}
-			inserted_count += state->child_chunk.size();
-			table->storage->Append(*table, context, state->child_chunk);
-		}
-		chunk.SetCardinality(1);
-		chunk.SetValue(0, 0, Value::BIGINT(inserted_count));
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class CreateTableSourceState : public GlobalSourceState {
+public:
+	CreateTableSourceState() : finished(false) {
 	}
 
-	state->finished = true;
+	bool finished;
+};
+
+unique_ptr<GlobalSourceState> PhysicalCreateTable::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<CreateTableSourceState>();
 }
+
+void PhysicalCreateTable::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+                                  LocalSourceState &lstate) const {
+	auto &state = (CreateTableSourceState &)gstate;
+	if (state.finished) {
+		return;
+	}
+	auto &catalog = Catalog::GetCatalog(context.client);
+	catalog.CreateTable(context.client, schema, info.get());
+	state.finished = true;
+}
+
+} // namespace duckdb

@@ -1,43 +1,59 @@
 #include "duckdb/execution/operator/schema/physical_create_index.hpp"
 
+#include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-void PhysicalCreateIndex::CreateARTIndex() {
-	auto art = make_unique<ART>(*table.storage, column_ids, move(unbound_expressions), info->unique);
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class CreateIndexSourceState : public GlobalSourceState {
+public:
+	CreateIndexSourceState() : finished(false) {
+	}
 
-	table.storage->AddIndex(move(art), expressions);
+	bool finished;
+};
+
+unique_ptr<GlobalSourceState> PhysicalCreateIndex::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<CreateIndexSourceState>();
 }
 
-void PhysicalCreateIndex::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) {
-	if (column_ids.size() == 0) {
-		throw NotImplementedException("CREATE INDEX does not refer to any columns in the base table!");
+void PhysicalCreateIndex::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+                                  LocalSourceState &lstate) const {
+	auto &state = (CreateIndexSourceState &)gstate;
+	if (state.finished) {
+		return;
+	}
+	if (column_ids.empty()) {
+		throw BinderException("CREATE INDEX does not refer to any columns in the base table!");
 	}
 
 	auto &schema = *table.schema;
-	if (!schema.CreateIndex(context, info.get())) {
-		// index already exists, but error ignored because of CREATE ... IF NOT
-		// EXISTS
+	auto index_entry = (IndexCatalogEntry *)schema.CreateIndex(context.client, info.get(), &table);
+	if (!index_entry) {
+		// index already exists, but error ignored because of IF NOT EXISTS
 		return;
 	}
 
-	// create the chunk to hold intermediate expression results
-
+	unique_ptr<Index> index;
 	switch (info->index_type) {
 	case IndexType::ART: {
-		CreateARTIndex();
+		index = make_unique<ART>(column_ids, unbound_expressions, info->unique);
 		break;
 	}
 	default:
-		assert(0);
-		throw NotImplementedException("Unimplemented index type");
+		throw InternalException("Unimplemented index type");
 	}
+	index_entry->index = index.get();
+	index_entry->info = table.storage->info;
+	table.storage->AddIndex(move(index), expressions);
 
 	chunk.SetCardinality(0);
-
-	state->finished = true;
+	state.finished = true;
 }
+
+} // namespace duckdb

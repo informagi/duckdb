@@ -12,12 +12,13 @@
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/parser/tableref.hpp"
+#include "duckdb/common/vector.hpp"
 
 namespace duckdb {
 //! Represents a JOIN between two expressions
 class JoinRef : public TableRef {
 public:
-	JoinRef() : TableRef(TableReferenceType::JOIN) {
+	JoinRef() : TableRef(TableReferenceType::JOIN), is_natural(false) {
 	}
 
 	//! The left hand side of the join
@@ -28,11 +29,13 @@ public:
 	unique_ptr<ParsedExpression> condition;
 	//! The join type
 	JoinType type;
-	//! Columns hidden from SELECT * expansion (because of USING clause)
-	unordered_set<string> hidden_columns;
+	//! Natural join
+	bool is_natural;
+	//! The set of USING columns (if any)
+	vector<string> using_columns;
 
 public:
-	bool Equals(const TableRef *other_) const override;
+	bool Equals(const TableRef *other_p) const override;
 
 	unique_ptr<TableRef> Copy() override;
 

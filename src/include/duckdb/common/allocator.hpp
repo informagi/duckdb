@@ -8,75 +8,80 @@
 
 #pragma once
 
-#include "duckdb/common/helper.hpp"
-
-#include <limits>
-#include <memory>
+#include "duckdb/common/common.hpp"
 
 namespace duckdb {
+class Allocator;
+class ClientContext;
+class DatabaseInstance;
 
-#define MINIMUM_ALLOCATOR_BLOCK_SIZE 4096
+struct PrivateAllocatorData {
+	virtual ~PrivateAllocatorData() {
+	}
+};
 
-//! The Allocator is a custom stack-based allocator that only supports bulk
-//! freeing of memory It is used by most of the components of DuckDB to allocate
-//! small operational objects (i.e. non-data/index related) NOTE! Objects
-//! allocated by the Allocator object will NOT have their destructor called!
-//! Hence do not allocate objects holding smart pointers or objects with custom
-//! destructors because they will leak! NOTE! Allocator is not thread safe
-//! either
+typedef data_ptr_t (*allocate_function_ptr_t)(PrivateAllocatorData *private_data, idx_t size);
+typedef void (*free_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
+typedef data_ptr_t (*reallocate_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
+
+class AllocatedData {
+public:
+	AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size);
+	~AllocatedData();
+
+	data_ptr_t get() {
+		return pointer;
+	}
+	const_data_ptr_t get() const {
+		return pointer;
+	}
+	idx_t GetSize() const {
+		return allocated_size;
+	}
+	void Reset();
+
+private:
+	Allocator &allocator;
+	data_ptr_t pointer;
+	idx_t allocated_size;
+};
+
 class Allocator {
 public:
-	void Destroy() {
-		chunk = nullptr;
+	Allocator();
+	Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
+	          reallocate_function_ptr_t reallocate_function_p, unique_ptr<PrivateAllocatorData> private_data);
+
+	data_ptr_t AllocateData(idx_t size);
+	void FreeData(data_ptr_t pointer, idx_t size);
+	data_ptr_t ReallocateData(data_ptr_t pointer, idx_t size);
+
+	unique_ptr<AllocatedData> Allocate(idx_t size) {
+		return make_unique<AllocatedData>(*this, AllocateData(size), size);
 	}
 
-	template <class T, typename... Args> T *make(Args &&... args) {
-		// get space to allocate the object
-		auto ptr = allocate(sizeof(T));
-		// use placement-new to allocate the object
-		return new (ptr) T(std::forward<Args>(args)...);
+	static data_ptr_t DefaultAllocate(PrivateAllocatorData *private_data, idx_t size) {
+		return (data_ptr_t)malloc(size);
 	}
+	static void DefaultFree(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size) {
+		free(pointer);
+	}
+	static data_ptr_t DefaultReallocate(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size) {
+		return (data_ptr_t)realloc(pointer, size);
+	}
+	static Allocator &Get(ClientContext &context);
+	static Allocator &Get(DatabaseInstance &db);
 
-	char *allocate(idx_t size) {
-		if (chunk && chunk->current_position + size < chunk->maximum_size) {
-			auto ptr = chunk->data.get() + chunk->current_position;
-			chunk->current_position += size;
-			return ptr;
-		}
-		// have to allocate a new block
-		if (size >= MINIMUM_ALLOCATOR_BLOCK_SIZE) {
-			// allocate a block just for this object
-			auto new_chunk = make_unique<AllocatorRegion>(size);
-			// allocate the space
-			auto ptr = new_chunk->data.get();
-			new_chunk->current_position = size;
-			// place it behind the current front object
-			new_chunk->prev = move(chunk->prev);
-			chunk->prev = move(new_chunk);
-			return ptr;
-		} else {
-			// make a block of MINIMUM_ALLOCATOR_BLOCK_SIZE
-			auto new_chunk = make_unique<AllocatorRegion>(MINIMUM_ALLOCATOR_BLOCK_SIZE);
-			// allocate the space
-			auto ptr = new_chunk->data.get();
-			new_chunk->current_position = size;
-			// append it to the end
-			new_chunk->prev = move(chunk);
-			chunk = move(new_chunk);
-			return ptr;
-		}
+	PrivateAllocatorData *GetPrivateData() {
+		return private_data.get();
 	}
 
 private:
-	struct AllocatorRegion {
-		AllocatorRegion(idx_t size) : current_position(0), maximum_size(size) {
-			data = unique_ptr<char[]>(new char[maximum_size]);
-		}
-		unique_ptr<char[]> data;
-		idx_t current_position;
-		idx_t maximum_size;
-		unique_ptr<AllocatorRegion> prev;
-	};
-	unique_ptr<AllocatorRegion> chunk;
+	allocate_function_ptr_t allocate_function;
+	free_function_ptr_t free_function;
+	reallocate_function_ptr_t reallocate_function;
+
+	unique_ptr<PrivateAllocatorData> private_data;
 };
+
 } // namespace duckdb

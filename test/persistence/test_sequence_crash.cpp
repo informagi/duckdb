@@ -13,7 +13,8 @@ using namespace duckdb;
 using namespace std;
 
 TEST_CASE("Test that sequence never returns the same value twice even with aborts", "[persistence][.]") {
-	FileSystem fs;
+	// disabled test for now
+	return;
 
 	string dbdir = TestCreatePath("defaultseq");
 	DeleteDatabase(dbdir);
@@ -78,7 +79,8 @@ static void write_entries_to_table(DuckDB *db, int i) {
 
 TEST_CASE("Test that sequence never returns the same value twice even with aborts and concurrent usage",
           "[persistence][.]") {
-	FileSystem fs;
+	// disabled test for now
+	return;
 
 	string dbdir = TestCreatePath("defaultseqconcurrent");
 	DeleteDatabase(dbdir);

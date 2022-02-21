@@ -11,8 +11,9 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 
-using namespace duckdb;
-using namespace std;
+#include "duckdb/function/scalar/regexp.hpp"
+
+namespace duckdb {
 
 unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator> op) {
 
@@ -20,7 +21,7 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 		op->children[child_idx] = Rewrite(move(op->children[child_idx]));
 	}
 
-	if (op->type != LogicalOperatorType::FILTER) {
+	if (op->type != LogicalOperatorType::LOGICAL_FILTER) {
 		return op;
 	}
 
@@ -29,7 +30,7 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 	for (auto &expr : op->expressions) {
 		if (expr->type == ExpressionType::BOUND_FUNCTION) {
 			auto &func = (BoundFunctionExpression &)*expr.get();
-			if (func.function.name != "regexp_matches" || func.children.size() != 2) {
+			if (func.function.name != "regexp_full_match" || func.children.size() != 2) {
 				continue;
 			}
 			auto &info = (RegexpMatchesBindData &)*func.bind_info;
@@ -38,10 +39,12 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 			}
 			auto filter_left = make_unique<BoundComparisonExpression>(
 			    ExpressionType::COMPARE_GREATERTHANOREQUALTO, func.children[0]->Copy(),
-			    make_unique<BoundConstantExpression>(Value(info.range_min)));
+			    make_unique<BoundConstantExpression>(
+			        Value::BLOB((const_data_ptr_t)info.range_min.c_str(), info.range_min.size())));
 			auto filter_right = make_unique<BoundComparisonExpression>(
 			    ExpressionType::COMPARE_LESSTHANOREQUALTO, func.children[0]->Copy(),
-			    make_unique<BoundConstantExpression>(Value(info.range_max)));
+			    make_unique<BoundConstantExpression>(
+			        Value::BLOB((const_data_ptr_t)info.range_max.c_str(), info.range_max.size())));
 			auto filter_expr = make_unique<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
 			                                                           move(filter_left), move(filter_right));
 
@@ -49,7 +52,7 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 		}
 	}
 
-	if (new_filter->expressions.size() > 0) {
+	if (!new_filter->expressions.empty()) {
 		new_filter->children = move(op->children);
 		op->children.clear();
 		op->children.push_back(move(new_filter));
@@ -57,3 +60,5 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 
 	return op;
 }
+
+} // namespace duckdb

@@ -14,10 +14,12 @@ namespace duckdb {
 
 class PhysicalEmptyResult : public PhysicalOperator {
 public:
-	PhysicalEmptyResult(vector<TypeId> types) : PhysicalOperator(PhysicalOperatorType::EMPTY_RESULT, types) {
+	explicit PhysicalEmptyResult(vector<LogicalType> types, idx_t estimated_cardinality)
+	    : PhysicalOperator(PhysicalOperatorType::EMPTY_RESULT, move(types), estimated_cardinality) {
 	}
 
 public:
-	void GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) override;
+	void GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+	             LocalSourceState &lstate) const override;
 };
 } // namespace duckdb

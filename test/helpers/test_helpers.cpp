@@ -10,6 +10,7 @@
 #include "duckdb/parser/parsed_data/copy_info.hpp"
 
 #include <cmath>
+#include <fstream>
 
 using namespace std;
 
@@ -29,17 +30,22 @@ bool NO_FAIL(unique_ptr<QueryResult> result) {
 }
 
 void TestDeleteDirectory(string path) {
-	FileSystem fs;
-	if (fs.DirectoryExists(path)) {
-		fs.RemoveDirectory(path);
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	if (fs->DirectoryExists(path)) {
+		fs->RemoveDirectory(path);
 	}
 }
 
 void TestDeleteFile(string path) {
-	FileSystem fs;
-	if (fs.FileExists(path)) {
-		fs.RemoveFile(path);
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	if (fs->FileExists(path)) {
+		fs->RemoveFile(path);
 	}
+}
+
+void TestChangeDirectory(string path) {
+	// set the base path for the tests
+	FileSystem::SetWorkingDirectory(path);
 }
 
 void DeleteDatabase(string path) {
@@ -48,16 +54,31 @@ void DeleteDatabase(string path) {
 }
 
 void TestCreateDirectory(string path) {
-	FileSystem fs;
-	fs.CreateDirectory(path);
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	fs->CreateDirectory(path);
+}
+
+string TestDirectoryPath() {
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	if (!fs->DirectoryExists(TESTING_DIRECTORY_NAME)) {
+		fs->CreateDirectory(TESTING_DIRECTORY_NAME);
+	}
+	return TESTING_DIRECTORY_NAME;
 }
 
 string TestCreatePath(string suffix) {
-	FileSystem fs;
-	if (!fs.DirectoryExists(TESTING_DIRECTORY_NAME)) {
-		fs.CreateDirectory(TESTING_DIRECTORY_NAME);
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	return fs->JoinPath(TestDirectoryPath(), suffix);
+}
+
+bool TestIsInternalError(const string &error) {
+	if (StringUtil::Contains(error, "Unoptimized Result differs from original result!")) {
+		return true;
 	}
-	return fs.JoinPath(TESTING_DIRECTORY_NAME, suffix);
+	if (StringUtil::Contains(error, "INTERNAL")) {
+		return true;
+	}
+	return false;
 }
 
 unique_ptr<DBConfig> GetTestConfig() {
@@ -66,12 +87,34 @@ unique_ptr<DBConfig> GetTestConfig() {
 	return result;
 }
 
-bool CHECK_COLUMN(QueryResult &result_, size_t column_number, vector<duckdb::Value> values) {
-	unique_ptr<MaterializedQueryResult> materialized;
-	if (result_.type == QueryResultType::STREAM_RESULT) {
-		materialized = ((StreamQueryResult &)result_).Materialize();
+string GetCSVPath() {
+	unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	string csv_path = TestCreatePath("csv_files");
+	if (fs->DirectoryExists(csv_path)) {
+		fs->RemoveDirectory(csv_path);
 	}
-	auto &result = materialized ? *materialized : (MaterializedQueryResult &)result_;
+	fs->CreateDirectory(csv_path);
+	return csv_path;
+}
+
+void WriteCSV(string path, const char *csv) {
+	ofstream csv_writer(path);
+	csv_writer << csv;
+	csv_writer.close();
+}
+
+void WriteBinary(string path, const uint8_t *data, uint64_t length) {
+	ofstream binary_writer(path, ios::binary);
+	binary_writer.write((const char *)data, length);
+	binary_writer.close();
+}
+
+bool CHECK_COLUMN(QueryResult &result_, size_t column_number, vector<duckdb::Value> values) {
+	if (result_.type == QueryResultType::STREAM_RESULT) {
+		fprintf(stderr, "Unexpected stream query result in CHECK_COLUMN\n");
+		return false;
+	}
+	auto &result = (MaterializedQueryResult &)result_;
 	if (!result.success) {
 		fprintf(stderr, "Query failed with message: %s\n", result.error.c_str());
 		return false;
@@ -82,14 +125,14 @@ bool CHECK_COLUMN(QueryResult &result_, size_t column_number, vector<duckdb::Val
 		return false;
 	}
 	if (values.size() == 0) {
-		if (result.collection.count != 0) {
+		if (result.collection.Count() != 0) {
 			result.Print();
 			return false;
 		} else {
 			return true;
 		}
 	}
-	if (result.collection.count == 0) {
+	if (result.collection.Count() == 0) {
 		result.Print();
 		return false;
 	}
@@ -99,19 +142,20 @@ bool CHECK_COLUMN(QueryResult &result_, size_t column_number, vector<duckdb::Val
 	}
 	size_t chunk_index = 0;
 	for (size_t i = 0; i < values.size();) {
-		if (chunk_index >= result.collection.chunks.size()) {
+		if (chunk_index >= result.collection.ChunkCount()) {
 			// ran out of chunks
 			result.Print();
 			return false;
 		}
 		// check this vector
-		auto &vector = result.collection.chunks[chunk_index]->data[column_number];
-		if (i + vector.size() > values.size()) {
+		auto &chunk = result.collection.GetChunk(chunk_index);
+		auto &vector = chunk.data[column_number];
+		if (i + chunk.size() > values.size()) {
 			// too many values in this vector
 			result.Print();
 			return false;
 		}
-		for (size_t j = 0; j < vector.size(); j++) {
+		for (size_t j = 0; j < chunk.size(); j++) {
 			// NULL <> NULL, hence special handling
 			if (vector.GetValue(j).is_null && values[i + j].is_null) {
 				continue;
@@ -126,12 +170,16 @@ bool CHECK_COLUMN(QueryResult &result_, size_t column_number, vector<duckdb::Val
 			}
 		}
 		chunk_index++;
-		i += vector.size();
+		i += chunk.size();
 	}
 	return true;
 }
 
 bool CHECK_COLUMN(unique_ptr<duckdb::QueryResult> &result, size_t column_number, vector<duckdb::Value> values) {
+	if (result->type == QueryResultType::STREAM_RESULT) {
+		auto &stream = (StreamQueryResult &)*result;
+		result = stream.Materialize();
+	}
 	return CHECK_COLUMN(*result, column_number, values);
 }
 
@@ -141,36 +189,36 @@ bool CHECK_COLUMN(unique_ptr<duckdb::MaterializedQueryResult> &result, size_t co
 }
 
 string compare_csv(duckdb::QueryResult &result, string csv, bool header) {
-	assert(result.type == QueryResultType::MATERIALIZED_RESULT);
+	D_ASSERT(result.type == QueryResultType::MATERIALIZED_RESULT);
 	auto &materialized = (MaterializedQueryResult &)result;
 	if (!materialized.success) {
 		fprintf(stderr, "Query failed with message: %s\n", materialized.error.c_str());
 		return materialized.error;
 	}
 	string error;
-	if (!compare_result(csv, materialized.collection, materialized.sql_types, header, error)) {
+	if (!compare_result(csv, materialized.collection, materialized.types, header, error)) {
 		return error;
 	}
 	return "";
 }
 
 string show_diff(DataChunk &left, DataChunk &right) {
-	if (left.column_count() != right.column_count()) {
-		return StringUtil::Format("Different column counts: %d vs %d", (int)left.column_count(),
-		                          (int)right.column_count());
+	if (left.ColumnCount() != right.ColumnCount()) {
+		return StringUtil::Format("Different column counts: %d vs %d", (int)left.ColumnCount(),
+		                          (int)right.ColumnCount());
 	}
 	if (left.size() != right.size()) {
 		return StringUtil::Format("Different sizes: %zu vs %zu", left.size(), right.size());
 	}
 	string difference;
-	for (size_t i = 0; i < left.column_count(); i++) {
+	for (size_t i = 0; i < left.ColumnCount(); i++) {
 		bool has_differences = false;
 		auto &left_vector = left.data[i];
 		auto &right_vector = right.data[i];
-		string left_column = StringUtil::Format("Result\n------\n%s [", TypeIdToString(left_vector.type).c_str());
-		string right_column = StringUtil::Format("Expect\n------\n%s [", TypeIdToString(right_vector.type).c_str());
-		if (left_vector.type == right_vector.type) {
-			for (size_t j = 0; j < left_vector.size(); j++) {
+		string left_column = StringUtil::Format("Result\n------\n%s [", left_vector.GetType().ToString().c_str());
+		string right_column = StringUtil::Format("Expect\n------\n%s [", right_vector.GetType().ToString().c_str());
+		if (left_vector.GetType() == right_vector.GetType()) {
+			for (size_t j = 0; j < left.size(); j++) {
 				auto left_value = left_vector.GetValue(j);
 				auto right_value = right_vector.GetValue(j);
 				if (!Value::ValuesAreEqual(left_value, right_value)) {
@@ -197,17 +245,17 @@ string show_diff(DataChunk &left, DataChunk &right) {
 }
 
 bool compare_chunk(DataChunk &left, DataChunk &right) {
-	if (left.column_count() != right.column_count()) {
+	if (left.ColumnCount() != right.ColumnCount()) {
 		return false;
 	}
 	if (left.size() != right.size()) {
 		return false;
 	}
-	for (size_t i = 0; i < left.column_count(); i++) {
+	for (size_t i = 0; i < left.ColumnCount(); i++) {
 		auto &left_vector = left.data[i];
 		auto &right_vector = right.data[i];
-		if (left_vector.type == right_vector.type) {
-			for (size_t j = 0; j < left_vector.size(); j++) {
+		if (left_vector.GetType() == right_vector.GetType()) {
+			for (size_t j = 0; j < left.size(); j++) {
 				auto left_value = left_vector.GetValue(j);
 				auto right_value = right_vector.GetValue(j);
 				if (!Value::ValuesAreEqual(left_value, right_value)) {
@@ -221,28 +269,32 @@ bool compare_chunk(DataChunk &left, DataChunk &right) {
 
 //! Compares the result of a pipe-delimited CSV with the given DataChunk
 //! Returns true if they are equal, and stores an error_message otherwise
-bool compare_result(string csv, ChunkCollection &collection, vector<SQLType> sql_types, bool has_header,
+bool compare_result(string csv, ChunkCollection &collection, vector<LogicalType> sql_types, bool has_header,
                     string &error_message) {
-	assert(collection.types.size() == sql_types.size());
+	D_ASSERT(collection.Count() == 0 || collection.Types().size() == sql_types.size());
+
+	// create the csv on disk
+	auto csv_path = TestCreatePath("__test_csv_path.csv");
+	ofstream f(csv_path);
+	f << csv;
+	f.close();
 
 	// set up the CSV reader
-	CopyInfo info;
-	info.delimiter = "|";
-	info.header = true;
-	info.quote = "\"";
-	info.escape = "\"";
+	BufferedCSVReaderOptions options;
+	options.auto_detect = false;
+	options.delimiter = "|";
+	options.header = has_header;
+	options.quote = "\"";
+	options.escape = "\"";
+	options.file_path = csv_path;
+
 	// set up the intermediate result chunk
-	vector<TypeId> internal_types;
-	for (auto &type : sql_types) {
-		internal_types.push_back(GetInternalType(type));
-	}
 	DataChunk parsed_result;
-	parsed_result.Initialize(internal_types);
+	parsed_result.Initialize(sql_types);
 
-	// convert the CSV string into a stringstream
-	auto source = make_unique<istringstream>(csv);
-
-	BufferedCSVReader reader(info, sql_types, move(source));
+	DuckDB db;
+	Connection con(db);
+	BufferedCSVReader reader(*con.context, move(options), sql_types);
 	idx_t collection_index = 0;
 	idx_t tuple_count = 0;
 	while (true) {
@@ -250,20 +302,20 @@ bool compare_result(string csv, ChunkCollection &collection, vector<SQLType> sql
 		try {
 			parsed_result.Reset();
 			reader.ParseCSV(parsed_result);
-		} catch (Exception &ex) {
+		} catch (std::exception &ex) {
 			error_message = "Could not parse CSV: " + string(ex.what());
 			return false;
 		}
 		if (parsed_result.size() == 0) {
 			// out of tuples in CSV file
-			if (collection_index < collection.chunks.size()) {
+			if (collection_index < collection.ChunkCount()) {
 				error_message = StringUtil::Format("Too many tuples in result! Found %llu tuples, but expected %llu",
-				                                   collection.count, tuple_count);
+				                                   collection.Count(), tuple_count);
 				return false;
 			}
 			return true;
 		}
-		if (collection_index >= collection.chunks.size()) {
+		if (collection_index >= collection.ChunkCount()) {
 			// ran out of chunks in the collection, but there are still tuples in the result
 			// keep parsing the csv file to get the total expected count
 			while (parsed_result.size() > 0) {
@@ -272,12 +324,13 @@ bool compare_result(string csv, ChunkCollection &collection, vector<SQLType> sql
 				reader.ParseCSV(parsed_result);
 			}
 			error_message = StringUtil::Format("Too few tuples in result! Found %llu tuples, but expected %llu",
-			                                   collection.count, tuple_count);
+			                                   collection.Count(), tuple_count);
 			return false;
 		}
 		// same counts, compare tuples in chunks
-		if (!compare_chunk(*collection.chunks[collection_index], parsed_result)) {
-			error_message = show_diff(*collection.chunks[collection_index], parsed_result);
+		if (!compare_chunk(collection.GetChunk(collection_index), parsed_result)) {
+			error_message = show_diff(collection.GetChunk(collection_index), parsed_result);
+			return false;
 		}
 
 		collection_index++;

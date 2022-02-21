@@ -4,8 +4,13 @@
 #include "duckdb/common/serializer.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
+
+Constraint::Constraint(ConstraintType type) : type(type) {
+}
+
+Constraint::~Constraint() {
+}
 
 void Constraint::Serialize(Serializer &serializer) {
 	serializer.Write<ConstraintType>(type);
@@ -21,11 +26,12 @@ unique_ptr<Constraint> Constraint::Deserialize(Deserializer &source) {
 	case ConstraintType::UNIQUE:
 		return UniqueConstraint::Deserialize(source);
 	default:
-		// don't know how to serialize this constraint type
-		return nullptr;
+		throw InternalException("Unrecognized constraint type for serialization");
 	}
 }
 
 void Constraint::Print() {
 	Printer::Print(ToString());
 }
+
+} // namespace duckdb

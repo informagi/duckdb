@@ -1,136 +1,46 @@
-#' @include duckdb.R
-NULL
-
-#' DBI methods
-#'
-#' Implementations of pure virtual functions defined in the `DBI` package.
-#' @name DBI
-NULL
-
 DBDIR_MEMORY <- ":memory:"
 
-#' DuckDB driver
-#'
-#' TBD.
-#'
-#' @export
-#' @import methods DBI
-#' @examples
-#' \dontrun{
-#' #' library(DBI)
-#' duckdb::duckdb()
-#' }
-
-
-duckdb <- function(dbdir=DBDIR_MEMORY, read_only=FALSE) {
-  check_flag(read_only)
-  new(
-    "duckdb_driver",
-    database_ref = .Call(duckdb_startup_R, dbdir, read_only),
-    dbdir=dbdir,
-    read_only = read_only
-  )
+check_flag <- function(x) {
+  if (is.null(x) || length(x) != 1 || is.na(x) || !is.logical(x)) {
+    stop("flags need to be scalar logicals")
+  }
 }
 
-#' @rdname DBI
-#' @export
-setClass("duckdb_driver", contains = "DBIDriver", slots = list(database_ref = "externalptr", dbdir="character", read_only="logical"))
-
-extptr_str <- function(e, n=5) {
+extptr_str <- function(e, n = 5) {
   x <- .Call(duckdb_ptr_to_str, e)
-  substr(x, nchar(x)-n+1, nchar(x))
+  substr(x, nchar(x) - n + 1, nchar(x))
 }
 
 drv_to_string <- function(drv) {
   if (!is(drv, "duckdb_driver")) {
     stop("pass a duckdb_driver object")
   }
-  sprintf("<duckdb_driver %s dbdir='%s' read_only=%s>",  extptr_str(drv@database_ref), drv@dbdir, drv@read_only)
+  sprintf("<duckdb_driver %s dbdir='%s' read_only=%s>", extptr_str(drv@database_ref), drv@dbdir, drv@read_only)
 }
 
-#' @rdname DBI
-#' @inheritParams methods::show
+#' @description
+#' `duckdb()` creates or reuses a database instance.
+#'
+#' @return `duckdb()` returns an object of class \linkS4class{duckdb_driver}.
+#'
+#' @import methods DBI
 #' @export
-setMethod(
-  "show", "duckdb_driver",
-  function(object) {
-    cat(drv_to_string(object))
-    cat("\n")
-  })
+duckdb <- function(dbdir = DBDIR_MEMORY, read_only = FALSE, config=list()) {
+  check_flag(read_only)
+  new(
+    "duckdb_driver",
+    database_ref = .Call(duckdb_startup_R, dbdir, read_only, config),
+    dbdir = dbdir,
+    read_only = read_only
+  )
+}
 
-#' @rdname DBI
-#' @inheritParams DBI::dbConnect
-#' @export
-setMethod(
-  "dbConnect", "duckdb_driver",
-  function(drv, dbdir=DBDIR_MEMORY, ..., debug=getOption("duckdb.debug", FALSE), read_only=FALSE) {
-
-    check_flag(debug)
-
-    missing_dbdir <- missing(dbdir)
-    dbdir <- path.expand(as.character(dbdir))
-
-
-    # aha, a late comer. let's make a new instance.
-    if (!missing_dbdir && dbdir != drv@dbdir) {
-      duckdb_shutdown(drv)
-      drv <- duckdb(dbdir, read_only)
-    }
-
-    duckdb_connection(drv, debug=debug)
-  }
-)
-
-#' @rdname DBI
-#' @inheritParams DBI::dbDataType
-#' @export
-setMethod(
-  "dbDataType", "duckdb_driver",
-  function(dbObj, obj, ...) {
-
-  if (is.null(obj)) stop("NULL parameter")
-  if (is.data.frame(obj)) {
-    return (vapply(obj, function(x) dbDataType(dbObj, x), FUN.VALUE = "character"))
-  }
-#  else if (int64 && inherits(obj, "integer64")) "BIGINT"
-  else if (inherits(obj, "Date")) "DATE"
-  else if (inherits(obj, "difftime")) "TIME"
-  else if (is.logical(obj)) "BOOLEAN"
-  else if (is.integer(obj)) "INTEGER"
-  else if (is.numeric(obj)) "DOUBLE"
-  else if (inherits(obj, "POSIXt")) "TIMESTAMP"
-  else if (is.list(obj) && all(vapply(obj, typeof, FUN.VALUE = "character") == "raw" || is.na(obj))) "BLOB"
-  else "STRING"
-
-  })
-
-#' @rdname DBI
-#' @inheritParams DBI::dbIsValid
-#' @export
-setMethod(
-  "dbIsValid", "duckdb_driver",
-  function(dbObj, ...) {
-    valid <- FALSE
-    tryCatch ({
-      con <- dbConnect(dbObj)
-      dbExecute(con, SQL("SELECT 1"))
-      dbDisconnect(con)
-      valid <- TRUE
-    }, error = function(c) {
-    })
-    valid
-  })
-
-#' @rdname DBI
-#' @inheritParams DBI::dbGetInfo
-#' @export
-setMethod(
-  "dbGetInfo", "duckdb_driver",
-  function(dbObj, ...) {
-    list(driver.version=NA, client.version=NA)
-  })
-
-
+#' @description
+#' `duckdb_shutdown()` shuts down a database instance.
+#'
+#' @return `dbDisconnect()` and `duckdb_shutdown()` are called for their
+#'   side effect.
+#' @rdname duckdb
 #' @export
 duckdb_shutdown <- function(drv) {
   if (!is(drv, "duckdb_driver")) {
@@ -144,21 +54,25 @@ duckdb_shutdown <- function(drv) {
   invisible(TRUE)
 }
 
-is_installed <- function (pkg) {
-    as.logical(requireNamespace(pkg, quietly = TRUE)) == TRUE
+is_installed <- function(pkg) {
+  as.logical(requireNamespace(pkg, quietly = TRUE)) == TRUE
 }
 
+check_tz <- function(timezone) {
 
-#' @importFrom DBI dbConnect
-#' @importFrom dbplyr src_dbi
-#' @export
-src_duckdb <- function (path=":memory:", create = FALSE, read_only=FALSE) {
-    if (!is_installed("dbplyr")) {
-      stop("Need package `dbplyr` installed.")
-    }
-    if (path != ":memory:" && !create && !file.exists(path)) {
-        stop("`path` '",path,"' must already exist, unless `create` = TRUE")
-    }
-    con <- DBI::dbConnect(duckdb::duckdb(), path, read_only=read_only)
-    dbplyr::src_dbi(con, auto_disconnect = TRUE)
+  if (!is.null(timezone) && timezone == "") {
+    return(Sys.timezone())
+  }
+
+  if (is.null(timezone) || !timezone %in% OlsonNames()) {
+    warning(
+      "Invalid time zone '", timezone, "', ",
+      "falling back to UTC.\n",
+      "Set the `timezone_out` argument to a valid time zone.\n",
+      call. = FALSE
+    )
+    return("UTC")
+  }
+
+  timezone
 }

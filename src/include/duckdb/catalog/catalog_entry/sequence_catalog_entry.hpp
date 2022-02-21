@@ -9,12 +9,13 @@
 #pragma once
 
 #include "duckdb/catalog/standard_entry.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/parser/parsed_data/create_sequence_info.hpp"
-
-#include <atomic>
-#include <mutex>
+#include "duckdb/parser/parsed_data/alter_table_info.hpp"
 
 namespace duckdb {
+class Serializer;
+class Deserializer;
 
 struct SequenceValue {
 	SequenceValue() : usage_count(0), counter(-1) {
@@ -33,11 +34,13 @@ public:
 	SequenceCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateSequenceInfo *info);
 
 	//! Lock for getting a value on the sequence
-	std::mutex lock;
+	mutex lock;
 	//! The amount of times the sequence has been used
 	uint64_t usage_count;
 	//! The sequence counter
 	int64_t counter;
+	//! The most recently returned value
+	int64_t last_value;
 	//! The increment value
 	int64_t increment;
 	//! The minimum value of the sequence
@@ -54,5 +57,9 @@ public:
 	virtual void Serialize(Serializer &serializer);
 	//! Deserializes to a CreateTableInfo
 	static unique_ptr<CreateSequenceInfo> Deserialize(Deserializer &source);
+
+	string ToSQL() override;
+
+	CatalogEntry *AlterOwnership(ClientContext &context, AlterInfo *info);
 };
 } // namespace duckdb

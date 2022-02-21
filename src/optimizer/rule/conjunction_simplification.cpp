@@ -4,8 +4,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 ConjunctionSimplificationRule::ConjunctionSimplificationRule(ExpressionRewriter &rewriter) : Rule(rewriter) {
 	// match on a ComparisonExpression that has a ConstantExpression as a check
@@ -32,13 +31,17 @@ unique_ptr<Expression> ConjunctionSimplificationRule::RemoveExpression(BoundConj
 }
 
 unique_ptr<Expression> ConjunctionSimplificationRule::Apply(LogicalOperator &op, vector<Expression *> &bindings,
-                                                            bool &changes_made) {
+                                                            bool &changes_made, bool is_root) {
 	auto conjunction = (BoundConjunctionExpression *)bindings[0];
 	auto constant_expr = bindings[1];
 	// the constant_expr is a scalar expression that we have to fold
 	// use an ExpressionExecutor to execute the expression
-	assert(constant_expr->IsFoldable());
-	auto constant_value = ExpressionExecutor::EvaluateScalar(*constant_expr).CastAs(TypeId::BOOL);
+	D_ASSERT(constant_expr->IsFoldable());
+	Value constant_value;
+	if (!ExpressionExecutor::TryEvaluateScalar(*constant_expr, constant_value)) {
+		return nullptr;
+	}
+	constant_value = constant_value.CastAs(LogicalType::BOOLEAN);
 	if (constant_value.is_null) {
 		// we can't simplify conjunctions with a constant NULL
 		return nullptr;
@@ -52,7 +55,7 @@ unique_ptr<Expression> ConjunctionSimplificationRule::Apply(LogicalOperator &op,
 			return RemoveExpression(*conjunction, constant_expr);
 		}
 	} else {
-		assert(conjunction->type == ExpressionType::CONJUNCTION_OR);
+		D_ASSERT(conjunction->type == ExpressionType::CONJUNCTION_OR);
 		if (!constant_value.value_.boolean) {
 			// FALSE in OR, remove the expression from the set
 			return RemoveExpression(*conjunction, constant_expr);
@@ -62,3 +65,5 @@ unique_ptr<Expression> ConjunctionSimplificationRule::Apply(LogicalOperator &op,
 		}
 	}
 }
+
+} // namespace duckdb

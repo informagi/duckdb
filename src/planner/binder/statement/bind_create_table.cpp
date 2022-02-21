@@ -7,17 +7,27 @@
 #include "duckdb/planner/expression_binder/constant_binder.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "duckdb/catalog/catalog_entry/type_catalog_entry.hpp"
 
-using namespace duckdb;
-using namespace std;
+#include <algorithm>
 
-static void CreateColumnMap(BoundCreateTableInfo &info) {
+namespace duckdb {
+
+static void CreateColumnMap(BoundCreateTableInfo &info, bool allow_duplicate_names) {
 	auto &base = (CreateTableInfo &)*info.base;
 
 	for (uint64_t oid = 0; oid < base.columns.size(); oid++) {
 		auto &col = base.columns[oid];
-		if (info.name_map.find(col.name) != info.name_map.end()) {
-			throw CatalogException("Column with name %s already exists!", col.name.c_str());
+		if (allow_duplicate_names) {
+			idx_t index = 1;
+			string base_name = col.name;
+			while (info.name_map.find(col.name) != info.name_map.end()) {
+				col.name = base_name + ":" + to_string(index++);
+			}
+		} else {
+			if (info.name_map.find(col.name) != info.name_map.end()) {
+				throw CatalogException("Column with name %s already exists!", col.name);
+			}
 		}
 
 		info.name_map[col.name] = oid;
@@ -29,6 +39,7 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 	auto &base = (CreateTableInfo &)*info.base;
 
 	bool has_primary_key = false;
+	vector<idx_t> primary_keys;
 	for (idx_t i = 0; i < base.constraints.size(); i++) {
 		auto &cond = base.constraints[i];
 		switch (cond->type) {
@@ -54,41 +65,54 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 		case ConstraintType::UNIQUE: {
 			auto &unique = (UniqueConstraint &)*cond;
 			// have to resolve columns of the unique constraint
-			unordered_set<idx_t> keys;
-			if (unique.index != INVALID_INDEX) {
-				assert(unique.index < base.columns.size());
+			vector<idx_t> keys;
+			unordered_set<idx_t> key_set;
+			if (unique.index != DConstants::INVALID_INDEX) {
+				D_ASSERT(unique.index < base.columns.size());
 				// unique constraint is given by single index
-				keys.insert(unique.index);
+				unique.columns.push_back(base.columns[unique.index].name);
+				keys.push_back(unique.index);
+				key_set.insert(unique.index);
 			} else {
 				// unique constraint is given by list of names
 				// have to resolve names
-				assert(unique.columns.size() > 0);
+				D_ASSERT(!unique.columns.empty());
 				for (auto &keyname : unique.columns) {
 					auto entry = info.name_map.find(keyname);
 					if (entry == info.name_map.end()) {
-						throw ParserException("column \"%s\" named in key does not exist", keyname.c_str());
+						throw ParserException("column \"%s\" named in key does not exist", keyname);
 					}
-					if (find(keys.begin(), keys.end(), entry->second) != keys.end()) {
+					if (key_set.find(entry->second) != key_set.end()) {
 						throw ParserException("column \"%s\" appears twice in "
 						                      "primary key constraint",
-						                      keyname.c_str());
+						                      keyname);
 					}
-					keys.insert(entry->second);
+					keys.push_back(entry->second);
+					key_set.insert(entry->second);
 				}
 			}
 
 			if (unique.is_primary_key) {
 				// we can only have one primary key per table
 				if (has_primary_key) {
-					throw ParserException("table \"%s\" has more than one primary key", base.table.c_str());
+					throw ParserException("table \"%s\" has more than one primary key", base.table);
 				}
 				has_primary_key = true;
+				primary_keys = keys;
 			}
-			info.bound_constraints.push_back(make_unique<BoundUniqueConstraint>(keys, unique.is_primary_key));
+			info.bound_constraints.push_back(
+			    make_unique<BoundUniqueConstraint>(move(keys), move(key_set), unique.is_primary_key));
 			break;
 		}
 		default:
 			throw NotImplementedException("unrecognized constraint type in bind");
+		}
+	}
+	if (has_primary_key) {
+		// if there is a primary key index, also create a NOT NULL constraint for each of the columns
+		for (auto &column_index : primary_keys) {
+			base.constraints.push_back(make_unique<NotNullConstraint>(column_index));
+			info.bound_constraints.push_back(make_unique<BoundNotNullConstraint>(column_index));
 		}
 	}
 }
@@ -105,35 +129,54 @@ void Binder::BindDefaultValues(vector<ColumnDefinition> &columns, vector<unique_
 			bound_default = default_binder.Bind(default_copy);
 		} else {
 			// no default value specified: push a default value of constant null
-			bound_default = make_unique<BoundConstantExpression>(Value(GetInternalType(columns[i].type)));
+			bound_default = make_unique<BoundConstantExpression>(Value(columns[i].type));
 		}
 		bound_defaults.push_back(move(bound_default));
 	}
 }
 
-unique_ptr<BoundCreateInfo> Binder::BindCreateTableInfo(unique_ptr<CreateInfo> info) {
+unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateInfo> info) {
 	auto &base = (CreateTableInfo &)*info;
 
 	auto result = make_unique<BoundCreateTableInfo>(move(info));
+	result->schema = BindSchema(*result->base);
 	if (base.query) {
 		// construct the result object
-		result->query = unique_ptr_cast<BoundSQLStatement, BoundSelectStatement>(Bind(*base.query));
+		auto query_obj = Bind(*base.query);
+		result->query = move(query_obj.plan);
+
 		// construct the set of columns based on the names and types of the query
-		auto &names = result->query->node->names;
-		auto &sql_types = result->query->node->types;
-		assert(names.size() == sql_types.size());
+		auto &names = query_obj.names;
+		auto &sql_types = query_obj.types;
+		D_ASSERT(names.size() == sql_types.size());
 		for (idx_t i = 0; i < names.size(); i++) {
-			base.columns.push_back(ColumnDefinition(names[i], sql_types[i]));
+			base.columns.emplace_back(names[i], sql_types[i]);
 		}
 		// create the name map for the statement
-		CreateColumnMap(*result);
+		CreateColumnMap(*result, true);
 	} else {
 		// create the name map for the statement
-		CreateColumnMap(*result);
+		CreateColumnMap(*result, false);
 		// bind any constraints
 		BindConstraints(*this, *result);
 		// bind the default values
 		BindDefaultValues(base.columns, result->bound_defaults);
 	}
-	return move(result);
+	// bind collations to detect any unsupported collation errors
+	for (auto &column : base.columns) {
+		ExpressionBinder::TestCollation(context, StringType::GetCollation(column.type));
+		BindLogicalType(context, column.type);
+		if (column.type.id() == LogicalTypeId::ENUM) {
+			// We add a catalog dependency
+			auto enum_dependency = EnumType::GetCatalog(column.type);
+			if (enum_dependency) {
+				// Only if the ENUM comes from a create type
+				result->dependencies.insert(enum_dependency);
+			}
+		}
+	}
+	this->allow_stream_result = false;
+	return result;
 }
+
+} // namespace duckdb

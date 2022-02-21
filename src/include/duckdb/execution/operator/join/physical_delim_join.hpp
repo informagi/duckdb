@@ -12,22 +12,36 @@
 #include "duckdb/execution/physical_operator.hpp"
 
 namespace duckdb {
+class PhysicalHashAggregate;
+
 //! PhysicalDelimJoin represents a join where the LHS will be duplicate eliminated and pushed into a
 //! PhysicalChunkCollectionScan in the RHS.
 class PhysicalDelimJoin : public PhysicalOperator {
 public:
-	PhysicalDelimJoin(LogicalOperator &op, unique_ptr<PhysicalOperator> original_join,
-	                  vector<PhysicalOperator *> delim_scans);
+	PhysicalDelimJoin(vector<LogicalType> types, unique_ptr<PhysicalOperator> original_join,
+	                  vector<PhysicalOperator *> delim_scans, idx_t estimated_cardinality);
 
 	unique_ptr<PhysicalOperator> join;
-	unique_ptr<PhysicalOperator> distinct;
-	ChunkCollection lhs_data;
-	ChunkCollection delim_data;
+	unique_ptr<PhysicalHashAggregate> distinct;
+	vector<PhysicalOperator *> delim_scans;
 
 public:
-	void GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) override;
-	unique_ptr<PhysicalOperatorState> GetOperatorState() override;
-	string ExtraRenderInformation() const override;
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override;
+	SinkResultType Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate,
+	                    DataChunk &input) const override;
+	void Combine(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate) const override;
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          GlobalSinkState &gstate) const override;
+
+	bool IsSink() const override {
+		return true;
+	}
+	bool ParallelSink() const override {
+		return true;
+	}
+
+	string ParamsToString() const override;
 };
 
 } // namespace duckdb

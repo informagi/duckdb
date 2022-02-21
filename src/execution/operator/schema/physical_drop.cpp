@@ -1,19 +1,43 @@
 #include "duckdb/execution/operator/schema/physical_drop.hpp"
 #include "duckdb/main/client_context.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-void PhysicalDrop::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) {
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class DropSourceState : public GlobalSourceState {
+public:
+	DropSourceState() : finished(false) {
+	}
+
+	bool finished;
+};
+
+unique_ptr<GlobalSourceState> PhysicalDrop::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<DropSourceState>();
+}
+
+void PhysicalDrop::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+                           LocalSourceState &lstate) const {
+	auto &state = (DropSourceState &)gstate;
+	if (state.finished) {
+		return;
+	}
 	switch (info->type) {
-	case CatalogType::PREPARED_STATEMENT:
-		if (!context.prepared_statements->DropEntry(context.ActiveTransaction(), info->name, false)) {
-			// silently ignore
+	case CatalogType::PREPARED_STATEMENT: {
+		// DEALLOCATE silently ignores errors
+		auto &statements = context.client.prepared_statements;
+		if (statements.find(info->name) != statements.end()) {
+			statements.erase(info->name);
 		}
 		break;
+	}
 	default:
-		Catalog::GetCatalog(context).DropEntry(context, info.get());
+		Catalog::GetCatalog(context.client).DropEntry(context.client, info.get());
 		break;
 	}
-	state->finished = true;
+	state.finished = true;
 }
+
+} // namespace duckdb

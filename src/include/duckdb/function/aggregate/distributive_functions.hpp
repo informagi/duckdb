@@ -14,43 +14,16 @@
 
 namespace duckdb {
 
-struct StandardDistributiveFunction {
-	template <class STATE> static void Initialize(STATE *state) {
-		*state = NullValue<STATE>();
-	}
+struct BitAndFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
 
-	template <class INPUT_TYPE, class STATE, class OP>
-	static void Operation(STATE *state, INPUT_TYPE *input, nullmask_t &nullmask, idx_t idx) {
-		if (IsNullValue<INPUT_TYPE>(*state)) {
-			*state = input[idx];
-		} else {
-			OP::template Execute<INPUT_TYPE, STATE>(state, input[idx]);
-		}
-	}
+struct BitOrFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
 
-	template <class T, class STATE>
-	static void Finalize(Vector &result, STATE *state, T *target, nullmask_t &nullmask, idx_t idx) {
-		nullmask[idx] = IsNullValue<T>(*state);
-		target[idx] = *state;
-	}
-
-	template <class STATE, class OP> static void Combine(STATE source, STATE *target) {
-		if (IsNullValue<STATE>(source)) {
-			// source is NULL, nothing to do
-			return;
-		}
-		if (IsNullValue<STATE>(*target)) {
-			// target is NULL, use source value directly
-			*target = source;
-		} else {
-			// else perform the operation
-			OP::template Execute<STATE, STATE>(target, source);
-		}
-	}
-
-	static bool IgnoreNull() {
-		return true;
-	}
+struct BitXorFun {
+	static void RegisterFunction(BuiltinFunctions &set);
 };
 
 struct CountStarFun {
@@ -65,8 +38,38 @@ struct CountFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct BoolAndFun {
+	static AggregateFunction GetFunction();
+
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct BoolOrFun {
+	static AggregateFunction GetFunction();
+
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ProductFun {
+	static AggregateFunction GetFunction();
+
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ApproxCountDistinctFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ArgMinFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ArgMaxFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 struct FirstFun {
-	static AggregateFunction GetFunction(SQLType type);
+	static AggregateFunction GetFunction(const LogicalType &type);
 
 	static void RegisterFunction(BuiltinFunctions &set);
 };
@@ -79,7 +82,28 @@ struct MinFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct MaxByFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct MinByFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 struct SumFun {
+	static AggregateFunction GetSumAggregate(PhysicalType type);
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct SkewFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct KurtosisFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct EntropyFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 

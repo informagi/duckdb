@@ -10,23 +10,48 @@
 
 #include "duckdb/common/types/chunk_collection.hpp"
 #include "duckdb/execution/physical_operator.hpp"
+#include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/planner/bound_query_node.hpp"
 
 namespace duckdb {
 
-//! Represents a physical ordering of the data. Note that this will not change
-//! the data but only add a selection vector.
+class OrderGlobalState;
+
+//! Physically re-orders the input data
 class PhysicalOrder : public PhysicalOperator {
 public:
-	PhysicalOrder(vector<TypeId> types, vector<BoundOrderByNode> orders)
-	    : PhysicalOperator(PhysicalOperatorType::ORDER_BY, move(types)), orders(move(orders)) {
-	}
+	PhysicalOrder(vector<LogicalType> types, vector<BoundOrderByNode> orders, idx_t estimated_cardinality);
 
+	//! Input data
 	vector<BoundOrderByNode> orders;
 
 public:
-	void GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) override;
-	unique_ptr<PhysicalOperatorState> GetOperatorState() override;
+	// Source interface
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
+	void GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+	             LocalSourceState &lstate) const override;
+
+public:
+	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override;
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+
+	SinkResultType Sink(ExecutionContext &context, GlobalSinkState &gstate_p, LocalSinkState &lstate_p,
+	                    DataChunk &input) const override;
+	void Combine(ExecutionContext &context, GlobalSinkState &gstate_p, LocalSinkState &lstate_p) const override;
+	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+	                          GlobalSinkState &gstate) const override;
+
+	bool IsSink() const override {
+		return true;
+	}
+	bool ParallelSink() const override {
+		return true;
+	}
+
+	string ParamsToString() const override;
+
+	//! Schedules tasks to merge the data during the Finalize phase
+	static void ScheduleMergeTasks(Pipeline &pipeline, Event &event, OrderGlobalState &state);
 };
 
 } // namespace duckdb

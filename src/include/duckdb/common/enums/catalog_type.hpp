@@ -17,16 +17,24 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 enum class CatalogType : uint8_t {
 	INVALID = 0,
-	TABLE = 1,
-	SCHEMA = 2,
-	TABLE_FUNCTION = 3,
-	SCALAR_FUNCTION = 4,
-	AGGREGATE_FUNCTION = 5,
-	VIEW = 6,
-	INDEX = 7,
-	PREPARED_STATEMENT = 8,
-	SEQUENCE = 9,
+	TABLE_ENTRY = 1,
+	SCHEMA_ENTRY = 2,
+	VIEW_ENTRY = 3,
+	INDEX_ENTRY = 4,
+	PREPARED_STATEMENT = 5,
+	SEQUENCE_ENTRY = 6,
+	COLLATION_ENTRY = 7,
+	TYPE_ENTRY = 8,
 
+	// functions
+	TABLE_FUNCTION_ENTRY = 25,
+	SCALAR_FUNCTION_ENTRY = 26,
+	AGGREGATE_FUNCTION_ENTRY = 27,
+	PRAGMA_FUNCTION_ENTRY = 28,
+	COPY_FUNCTION_ENTRY = 29,
+	MACRO_ENTRY = 30,
+
+	// version info
 	UPDATED_ENTRY = 50,
 	DELETED_ENTRY = 51,
 };

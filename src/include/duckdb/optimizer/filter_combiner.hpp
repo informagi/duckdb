@@ -13,6 +13,7 @@
 #include "duckdb/parser/expression_map.hpp"
 #include "duckdb/planner/expression.hpp"
 
+#include "duckdb/storage/data_table.hpp"
 #include <functional>
 
 namespace duckdb {
@@ -34,16 +35,24 @@ public:
 
 	FilterResult AddFilter(unique_ptr<Expression> expr);
 
-	void GenerateFilters(std::function<void(unique_ptr<Expression> filter)> callback);
+	void GenerateFilters(const std::function<void(unique_ptr<Expression> filter)> &callback);
 	bool HasFilters();
+	TableFilterSet GenerateTableScanFilters(vector<idx_t> &column_ids);
+	// vector<unique_ptr<TableFilter>> GenerateZonemapChecks(vector<idx_t> &column_ids, vector<unique_ptr<TableFilter>>
+	// &pushed_filters);
 
 private:
 	FilterResult AddFilter(Expression *expr);
-
+	FilterResult AddBoundComparisonFilter(Expression *expr);
+	FilterResult AddTransitiveFilters(BoundComparisonExpression &comparison);
+	unique_ptr<Expression> FindTransitiveFilter(Expression *expr);
+	// unordered_map<idx_t, std::pair<Value *, Value *>>
+	// FindZonemapChecks(vector<idx_t> &column_ids, unordered_set<idx_t> &not_constants, Expression *filter);
 	Expression *GetNode(Expression *expr);
 	idx_t GetEquivalenceSet(Expression *expr);
 	FilterResult AddConstantComparison(vector<ExpressionValueInformation> &info_list, ExpressionValueInformation info);
 
+private:
 	vector<unique_ptr<Expression>> remaining_filters;
 
 	expression_map_t<unique_ptr<Expression>> stored_expressions;

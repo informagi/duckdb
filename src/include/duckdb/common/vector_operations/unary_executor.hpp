@@ -17,75 +17,177 @@
 namespace duckdb {
 
 struct UnaryOperatorWrapper {
-	template <class FUNC, class OP, class INPUT_TYPE, class RESULT_TYPE>
-	static inline RESULT_TYPE Operation(FUNC fun, INPUT_TYPE input) {
+	template <class OP, class INPUT_TYPE, class RESULT_TYPE>
+	static inline RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
 		return OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input);
 	}
 };
 
 struct UnaryLambdaWrapper {
-	template <class FUNC, class OP, class INPUT_TYPE, class RESULT_TYPE>
-	static inline RESULT_TYPE Operation(FUNC fun, INPUT_TYPE input) {
-		return fun(input);
+	template <class FUNC, class INPUT_TYPE, class RESULT_TYPE>
+	static inline RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto fun = (FUNC *)dataptr;
+		return (*fun)(input);
+	}
+};
+
+struct GenericUnaryWrapper {
+	template <class OP, class INPUT_TYPE, class RESULT_TYPE>
+	static inline RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		return OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, mask, idx, dataptr);
+	}
+};
+
+template <class OP>
+struct UnaryStringOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto vector = (Vector *)dataptr;
+		return OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, *vector);
 	}
 };
 
 struct UnaryExecutor {
 private:
-	template <class INPUT_TYPE, class RESULT_TYPE, class OPWRAPPER, class OP, class FUNC, bool IGNORE_NULL>
+	template <class INPUT_TYPE, class RESULT_TYPE, class OPWRAPPER, class OP>
 	static inline void ExecuteLoop(INPUT_TYPE *__restrict ldata, RESULT_TYPE *__restrict result_data, idx_t count,
-	                               sel_t *__restrict sel_vector, nullmask_t nullmask, FUNC fun) {
+	                               const SelectionVector *__restrict sel_vector, ValidityMask &mask,
+	                               ValidityMask &result_mask, void *dataptr, bool adds_nulls) {
 		ASSERT_RESTRICT(ldata, ldata + count, result_data, result_data + count);
 
-		if (IGNORE_NULL && nullmask.any()) {
-			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
-				if (!nullmask[i]) {
-					result_data[i] = OPWRAPPER::template Operation<FUNC, OP, INPUT_TYPE, RESULT_TYPE>(fun, ldata[i]);
+		if (!mask.AllValid()) {
+			result_mask.EnsureWritable();
+			for (idx_t i = 0; i < count; i++) {
+				auto idx = sel_vector->get_index(i);
+				if (mask.RowIsValidUnsafe(idx)) {
+					result_data[i] =
+					    OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(ldata[idx], result_mask, i, dataptr);
+				} else {
+					result_mask.SetInvalid(i);
 				}
-			});
+			}
 		} else {
-			VectorOperations::Exec(sel_vector, count, [&](idx_t i, idx_t k) {
-				result_data[i] = OPWRAPPER::template Operation<FUNC, OP, INPUT_TYPE, RESULT_TYPE>(fun, ldata[i]);
-			});
+			if (adds_nulls) {
+				result_mask.EnsureWritable();
+			}
+			for (idx_t i = 0; i < count; i++) {
+				auto idx = sel_vector->get_index(i);
+				result_data[i] =
+				    OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(ldata[idx], result_mask, i, dataptr);
+			}
 		}
 	}
 
-	template <class INPUT_TYPE, class RESULT_TYPE, class OPWRAPPER, class OP, class FUNC, bool IGNORE_NULL>
-	static inline void ExecuteStandard(Vector &input, Vector &result, FUNC fun) {
-		assert(input.SameCardinality(result));
-		auto result_data = (RESULT_TYPE *)result.GetData();
+	template <class INPUT_TYPE, class RESULT_TYPE, class OPWRAPPER, class OP>
+	static inline void ExecuteFlat(INPUT_TYPE *__restrict ldata, RESULT_TYPE *__restrict result_data, idx_t count,
+	                               ValidityMask &mask, ValidityMask &result_mask, void *dataptr, bool adds_nulls) {
+		ASSERT_RESTRICT(ldata, ldata + count, result_data, result_data + count);
 
-		if (input.vector_type == VectorType::CONSTANT_VECTOR) {
-			auto ldata = (INPUT_TYPE *)input.GetData();
-
-			result.vector_type = VectorType::CONSTANT_VECTOR;
-			if (input.nullmask[0]) {
-				result.nullmask[0] = true;
+		if (!mask.AllValid()) {
+			if (!adds_nulls) {
+				result_mask.Initialize(mask);
 			} else {
-				result.nullmask[0] = false;
-				result_data[0] = OPWRAPPER::template Operation<FUNC, OP, INPUT_TYPE, RESULT_TYPE>(fun, ldata[0]);
+				result_mask.Copy(mask, count);
+			}
+			idx_t base_idx = 0;
+			auto entry_count = ValidityMask::EntryCount(count);
+			for (idx_t entry_idx = 0; entry_idx < entry_count; entry_idx++) {
+				auto validity_entry = mask.GetValidityEntry(entry_idx);
+				idx_t next = MinValue<idx_t>(base_idx + ValidityMask::BITS_PER_VALUE, count);
+				if (ValidityMask::AllValid(validity_entry)) {
+					// all valid: perform operation
+					for (; base_idx < next; base_idx++) {
+						result_data[base_idx] = OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(
+						    ldata[base_idx], result_mask, base_idx, dataptr);
+					}
+				} else if (ValidityMask::NoneValid(validity_entry)) {
+					// nothing valid: skip all
+					base_idx = next;
+					continue;
+				} else {
+					// partially valid: need to check individual elements for validity
+					idx_t start = base_idx;
+					for (; base_idx < next; base_idx++) {
+						if (ValidityMask::RowIsValid(validity_entry, base_idx - start)) {
+							D_ASSERT(mask.RowIsValid(base_idx));
+							result_data[base_idx] = OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(
+							    ldata[base_idx], result_mask, base_idx, dataptr);
+						}
+					}
+				}
 			}
 		} else {
-			input.Normalify();
-			auto ldata = (INPUT_TYPE *)input.GetData();
+			if (adds_nulls) {
+				result_mask.EnsureWritable();
+			}
+			for (idx_t i = 0; i < count; i++) {
+				result_data[i] =
+				    OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(ldata[i], result_mask, i, dataptr);
+			}
+		}
+	}
 
-			result.vector_type = VectorType::FLAT_VECTOR;
-			result.nullmask = input.nullmask;
-			ExecuteLoop<INPUT_TYPE, RESULT_TYPE, OPWRAPPER, OP, FUNC, IGNORE_NULL>(
-			    ldata, result_data, input.size(), input.sel_vector(), input.nullmask, fun);
+	template <class INPUT_TYPE, class RESULT_TYPE, class OPWRAPPER, class OP>
+	static inline void ExecuteStandard(Vector &input, Vector &result, idx_t count, void *dataptr, bool adds_nulls) {
+		switch (input.GetVectorType()) {
+		case VectorType::CONSTANT_VECTOR: {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+			auto result_data = ConstantVector::GetData<RESULT_TYPE>(result);
+			auto ldata = ConstantVector::GetData<INPUT_TYPE>(input);
+
+			if (ConstantVector::IsNull(input)) {
+				ConstantVector::SetNull(result, true);
+			} else {
+				ConstantVector::SetNull(result, false);
+				*result_data = OPWRAPPER::template Operation<OP, INPUT_TYPE, RESULT_TYPE>(
+				    *ldata, ConstantVector::Validity(result), 0, dataptr);
+			}
+			break;
+		}
+		case VectorType::FLAT_VECTOR: {
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto result_data = FlatVector::GetData<RESULT_TYPE>(result);
+			auto ldata = FlatVector::GetData<INPUT_TYPE>(input);
+
+			ExecuteFlat<INPUT_TYPE, RESULT_TYPE, OPWRAPPER, OP>(ldata, result_data, count, FlatVector::Validity(input),
+			                                                    FlatVector::Validity(result), dataptr, adds_nulls);
+			break;
+		}
+		default: {
+			VectorData vdata;
+			input.Orrify(count, vdata);
+
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto result_data = FlatVector::GetData<RESULT_TYPE>(result);
+			auto ldata = (INPUT_TYPE *)vdata.data;
+
+			ExecuteLoop<INPUT_TYPE, RESULT_TYPE, OPWRAPPER, OP>(ldata, result_data, count, vdata.sel, vdata.validity,
+			                                                    FlatVector::Validity(result), dataptr, adds_nulls);
+			break;
+		}
 		}
 	}
 
 public:
-	template <class INPUT_TYPE, class RESULT_TYPE, class OP, bool IGNORE_NULL = false>
-	static void Execute(Vector &input, Vector &result) {
-		ExecuteStandard<INPUT_TYPE, RESULT_TYPE, UnaryOperatorWrapper, OP, bool, IGNORE_NULL>(input, result, false);
+	template <class INPUT_TYPE, class RESULT_TYPE, class OP>
+	static void Execute(Vector &input, Vector &result, idx_t count) {
+		ExecuteStandard<INPUT_TYPE, RESULT_TYPE, UnaryOperatorWrapper, OP>(input, result, count, nullptr, false);
 	}
 
-	template <class INPUT_TYPE, class RESULT_TYPE, bool IGNORE_NULL = false,
-	          class FUNC = std::function<RESULT_TYPE(INPUT_TYPE)>>
-	static void Execute(Vector &input, Vector &result, FUNC fun) {
-		ExecuteStandard<INPUT_TYPE, RESULT_TYPE, UnaryLambdaWrapper, bool, FUNC, IGNORE_NULL>(input, result, fun);
+	template <class INPUT_TYPE, class RESULT_TYPE, class FUNC = std::function<RESULT_TYPE(INPUT_TYPE)>>
+	static void Execute(Vector &input, Vector &result, idx_t count, FUNC fun) {
+		ExecuteStandard<INPUT_TYPE, RESULT_TYPE, UnaryLambdaWrapper, FUNC>(input, result, count, (void *)&fun, false);
+	}
+
+	template <class INPUT_TYPE, class RESULT_TYPE, class OP>
+	static void GenericExecute(Vector &input, Vector &result, idx_t count, void *dataptr, bool adds_nulls = false) {
+		ExecuteStandard<INPUT_TYPE, RESULT_TYPE, GenericUnaryWrapper, OP>(input, result, count, dataptr, adds_nulls);
+	}
+
+	template <class INPUT_TYPE, class RESULT_TYPE, class OP>
+	static void ExecuteString(Vector &input, Vector &result, idx_t count) {
+		UnaryExecutor::GenericExecute<string_t, string_t, UnaryStringOperator<OP>>(input, result, count,
+		                                                                           (void *)&result);
 	}
 };
 

@@ -1,21 +1,13 @@
 #include "duckdb/execution/operator/filter/physical_filter.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/parallel/thread_context.hpp"
+namespace duckdb {
 
-using namespace duckdb;
-using namespace std;
-
-class PhysicalFilterState : public PhysicalOperatorState {
-public:
-	PhysicalFilterState(PhysicalOperator *child, Expression &expr) : PhysicalOperatorState(child), executor(expr) {
-	}
-
-	ExpressionExecutor executor;
-};
-
-PhysicalFilter::PhysicalFilter(vector<TypeId> types, vector<unique_ptr<Expression>> select_list)
-    : PhysicalOperator(PhysicalOperatorType::FILTER, types) {
-	assert(select_list.size() > 0);
+PhysicalFilter::PhysicalFilter(vector<LogicalType> types, vector<unique_ptr<Expression>> select_list,
+                               idx_t estimated_cardinality)
+    : PhysicalOperator(PhysicalOperatorType::FILTER, move(types), estimated_cardinality) {
+	D_ASSERT(select_list.size() > 0);
 	if (select_list.size() > 1) {
 		// create a big AND out of the expressions
 		auto conjunction = make_unique<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
@@ -28,32 +20,39 @@ PhysicalFilter::PhysicalFilter(vector<TypeId> types, vector<unique_ptr<Expressio
 	}
 }
 
-void PhysicalFilter::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state_) {
-	auto state = reinterpret_cast<PhysicalFilterState *>(state_);
-	idx_t initial_count;
-	idx_t result_count;
-	do {
-		// fetch a chunk from the child and run the filter
-		// we repeat this process until either (1) passing tuples are found, or (2) the child is completely exhausted
-		children[0]->GetChunk(context, chunk, state->child_state.get());
-		if (chunk.size() == 0) {
-			return;
-		}
-		initial_count = chunk.size();
-		result_count = state->executor.SelectExpression(chunk, chunk.owned_sel_vector);
-	} while (result_count == 0);
-
-	if (result_count == initial_count) {
-		// nothing was filtered: skip adding any selection vectors
-		return;
+class FilterState : public OperatorState {
+public:
+	explicit FilterState(Expression &expr) : executor(expr), sel(STANDARD_VECTOR_SIZE) {
 	}
-	chunk.SetCardinality(result_count, chunk.owned_sel_vector);
+
+	ExpressionExecutor executor;
+	SelectionVector sel;
+
+public:
+	void Finalize(PhysicalOperator *op, ExecutionContext &context) override {
+		context.thread.profiler.Flush(op, &executor, "filter", 0);
+	}
+};
+
+unique_ptr<OperatorState> PhysicalFilter::GetOperatorState(ClientContext &context) const {
+	return make_unique<FilterState>(*expression);
 }
 
-unique_ptr<PhysicalOperatorState> PhysicalFilter::GetOperatorState() {
-	return make_unique<PhysicalFilterState>(children[0].get(), *expression);
+OperatorResultType PhysicalFilter::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+                                           OperatorState &state_p) const {
+	auto &state = (FilterState &)state_p;
+	idx_t result_count = state.executor.SelectExpression(input, state.sel);
+	if (result_count == input.size()) {
+		// nothing was filtered: skip adding any selection vectors
+		chunk.Reference(input);
+	} else {
+		chunk.Slice(input, state.sel, result_count);
+	}
+	return OperatorResultType::NEED_MORE_INPUT;
 }
 
-string PhysicalFilter::ExtraRenderInformation() const {
+string PhysicalFilter::ParamsToString() const {
 	return expression->GetName();
 }
+
+} // namespace duckdb

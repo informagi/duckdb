@@ -8,34 +8,25 @@
 
 #pragma once
 
-#include <cstdlib>
 #include <memory>
-#include <string>
-#include <vector>
-#include <cmath>
+#include <cstdint>
+#include "duckdb/common/string.hpp"
+#include "duckdb/common/winapi.hpp"
 
 namespace duckdb {
 
 //! inline std directives that we use frequently
 using std::move;
-using std::string;
+using std::shared_ptr;
 using std::unique_ptr;
+using std::weak_ptr;
 using data_ptr = unique_ptr<char[]>;
-using std::vector;
+using std::make_shared;
 
 // NOTE: there is a copy of this in the Postgres' parser grammar (gram.y)
 #define DEFAULT_SCHEMA "main"
-#define TEMP_SCHEMA "temp"
+#define TEMP_SCHEMA    "temp"
 #define INVALID_SCHEMA ""
-
-//! The vector size used in the execution engine
-#ifndef STANDARD_VECTOR_SIZE
-#define STANDARD_VECTOR_SIZE 1024
-#endif
-
-#if ((STANDARD_VECTOR_SIZE & (STANDARD_VECTOR_SIZE - 1)) != 0)
-#error Vector size should be a power of two
-#endif
 
 //! a saner size_t for loop indices etc
 typedef uint64_t idx_t;
@@ -43,22 +34,16 @@ typedef uint64_t idx_t;
 //! The type used for row identifiers
 typedef int64_t row_t;
 
-//! The value used to signify an invalid index entry
-extern const idx_t INVALID_INDEX;
+//! The type used for hashes
+typedef uint64_t hash_t;
 
 //! data pointers
 typedef uint8_t data_t;
 typedef data_t *data_ptr_t;
 typedef const data_t *const_data_ptr_t;
 
-//! Type used to represent dates
-typedef int32_t date_t;
-//! Type used to represent time
-typedef int32_t dtime_t;
-//! Type used to represent timestamps
-typedef int64_t timestamp_t;
 //! Type used for the selection vector
-typedef uint16_t sel_t;
+typedef uint32_t sel_t;
 //! Type used for transaction timestamps
 typedef idx_t transaction_t;
 
@@ -70,14 +55,17 @@ extern const column_t COLUMN_IDENTIFIER_ROW_ID;
 //! The maximum row identifier used in tables
 extern const row_t MAX_ROW_ID;
 
-//! Zero selection vector: completely filled with the value 0 [READ ONLY]
-extern const sel_t ZERO_VECTOR[STANDARD_VECTOR_SIZE];
-
 extern const transaction_t TRANSACTION_ID_START;
+extern const transaction_t MAX_TRANSACTION_ID;
 extern const transaction_t MAXIMUM_QUERY_ID;
 extern const transaction_t NOT_DELETED_ID;
 
 extern const double PI;
+
+struct DConstants {
+	//! The value used to signify an invalid index entry
+	static constexpr const idx_t INVALID_INDEX = idx_t(-1);
+};
 
 struct Storage {
 	//! The size of a hard disk sector, only really needed for Direct IO

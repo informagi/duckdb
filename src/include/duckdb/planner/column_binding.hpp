@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include <functional>
 
 namespace duckdb {
 
@@ -16,7 +17,7 @@ struct ColumnBinding {
 	idx_t table_index;
 	idx_t column_index;
 
-	ColumnBinding() : table_index(INVALID_INDEX), column_index(INVALID_INDEX) {
+	ColumnBinding() : table_index(DConstants::INVALID_INDEX), column_index(DConstants::INVALID_INDEX) {
 	}
 	ColumnBinding(idx_t table, idx_t column) : table_index(table), column_index(column) {
 	}

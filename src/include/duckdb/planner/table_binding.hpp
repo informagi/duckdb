@@ -9,85 +9,78 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 
 namespace duckdb {
 class BindContext;
-class BoundBaseTableRef;
 class BoundQueryNode;
 class ColumnRefExpression;
 class SubqueryRef;
+class LogicalGet;
 class TableCatalogEntry;
 class TableFunctionCatalogEntry;
+class BoundTableFunction;
 
-enum class BindingType : uint8_t { TABLE = 0, SUBQUERY = 1, TABLE_FUNCTION = 2, GENERIC = 3 };
-
-//! A Binding represents a binding to a table, table-producing function or subquery with a specified table index. Used
-//! in the binder.
+//! A Binding represents a binding to a table, table-producing function or subquery with a specified table index.
 struct Binding {
-	Binding(BindingType type, const string &alias, idx_t index) : type(type), alias(alias), index(index) {
-	}
+	Binding(const string &alias, vector<LogicalType> types, vector<string> names, idx_t index);
 	virtual ~Binding() = default;
 
-	BindingType type;
+	//! The alias of the binding
 	string alias;
+	//! The table index of the binding
 	idx_t index;
+	vector<LogicalType> types;
+	//! Column names of the subquery
+	vector<string> names;
+	//! Name -> index for the names
+	case_insensitive_map_t<column_t> name_map;
 
 public:
-	virtual bool HasMatchingBinding(const string &column_name) = 0;
-	virtual BindResult Bind(ColumnRefExpression &colref, idx_t depth) = 0;
-	virtual void GenerateAllColumnExpressions(BindContext &context,
-	                                          vector<unique_ptr<ParsedExpression>> &select_list) = 0;
+	bool TryGetBindingIndex(const string &column_name, column_t &column_index);
+	column_t GetBindingIndex(const string &column_name);
+	bool HasMatchingBinding(const string &column_name);
+	virtual string ColumnNotFoundError(const string &column_name) const;
+	virtual BindResult Bind(ColumnRefExpression &colref, idx_t depth);
+	virtual TableCatalogEntry *GetTableEntry();
 };
 
-//! Represents a binding to a base table
+//! TableBinding is exactly like the Binding, except it keeps track of which columns were bound in the linked LogicalGet
+//! node for projection pushdown purposes.
 struct TableBinding : public Binding {
-	TableBinding(const string &alias, BoundBaseTableRef *bound);
+	TableBinding(const string &alias, vector<LogicalType> types, vector<string> names, LogicalGet &get, idx_t index,
+	             bool add_row_id = false);
 
-	BoundBaseTableRef *bound;
+	//! the underlying LogicalGet
+	LogicalGet &get;
 
 public:
-	bool HasMatchingBinding(const string &column_name) override;
 	BindResult Bind(ColumnRefExpression &colref, idx_t depth) override;
-	void GenerateAllColumnExpressions(BindContext &context, vector<unique_ptr<ParsedExpression>> &select_list) override;
+	TableCatalogEntry *GetTableEntry() override;
+	string ColumnNotFoundError(const string &column_name) const override;
 };
 
-//! Represents a binding to a subquery
-struct SubqueryBinding : public Binding {
-	SubqueryBinding(const string &alias, SubqueryRef &ref, BoundQueryNode &subquery, idx_t index);
-
-	BoundQueryNode &subquery;
-	//! Column names of the subquery
-	vector<string> names;
-	//! Name -> index for the names
-	unordered_map<string, uint64_t> name_map;
+//! MacroBinding is like the Binding, except the alias and index are set by default. Used for binding Macro
+//! Params/Arguments.
+struct MacroBinding : public Binding {
+	static constexpr const char *MACRO_NAME = "0_macro_parameters";
 
 public:
-	bool HasMatchingBinding(const string &column_name) override;
-	BindResult Bind(ColumnRefExpression &colref, idx_t depth) override;
-	void GenerateAllColumnExpressions(BindContext &context, vector<unique_ptr<ParsedExpression>> &select_list) override;
+	MacroBinding(vector<LogicalType> types_p, vector<string> names_p, string macro_name);
 
-private:
-	void AddName(string &name);
-};
-
-//! Represents a generic binding with types and names
-struct GenericBinding : public Binding {
-	GenericBinding(const string &alias, vector<SQLType> types, vector<string> names, idx_t index);
-
-	vector<SQLType> types;
-	//! Column names of the subquery
-	vector<string> names;
-	//! Name -> index for the names
-	unordered_map<string, uint64_t> name_map;
+	//! Arguments
+	vector<unique_ptr<ParsedExpression>> arguments;
+	//! The name of the macro
+	string macro_name;
 
 public:
-	bool HasMatchingBinding(const string &column_name) override;
 	BindResult Bind(ColumnRefExpression &colref, idx_t depth) override;
-	void GenerateAllColumnExpressions(BindContext &context, vector<unique_ptr<ParsedExpression>> &select_list) override;
+
+	//! Given the parameter colref, returns a copy of the argument that was supplied for this parameter
+	unique_ptr<ParsedExpression> ParamToArg(ColumnRefExpression &colref);
 };
 
 } // namespace duckdb

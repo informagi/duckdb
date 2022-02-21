@@ -1,7 +1,11 @@
 # use bison to generate the parser files
 # the following version of bison is used:
 # bison (GNU Bison) 2.3
-import os, subprocess, re
+import os
+import subprocess
+import re
+import sys
+from python_helpers import open_utf8
 
 bison_location     = "bison"
 base_dir           = 'third_party/libpg_query/grammar'
@@ -18,15 +22,28 @@ target_source_loc  = os.path.join(pg_dir, 'src_backend_parser_gram.cpp')
 target_header_loc  = os.path.join(pg_dir, 'include/parser/gram.hpp')
 kwlist_header      = os.path.join(pg_dir, 'include/parser/kwlist.hpp')
 
+counterexamples = False
+run_update = False
+for arg in sys.argv[1:]:
+    if arg.startswith("--bison="):
+        bison_location = arg.replace("--bison=", "")
+    elif arg.startswith("--counterexamples"):
+        counterexamples = True
+    elif arg.startswith("--update"):
+        run_update = True
+    else:
+        raise Exception("Unrecognized argument: " + arg + ", expected --counterexamples or --bison=/loc/to/bison")
+
 # parse the keyword lists
 def read_list_from_file(fname):
-    with open(fname, 'r') as f:
+    with open_utf8(fname, 'r') as f:
         return f.read().split('\n')
 
 kwdir = os.path.join(base_dir, 'keywords')
 unreserved_keywords = read_list_from_file(os.path.join(kwdir, 'unreserved_keywords.list'))
 colname_keywords = read_list_from_file(os.path.join(kwdir, 'column_name_keywords.list'))
-type_func_keywords = read_list_from_file(os.path.join(kwdir, 'type_func_name_keywords.list'))
+func_name_keywords = read_list_from_file(os.path.join(kwdir, 'func_name_keywords.list'))
+type_name_keywords = read_list_from_file(os.path.join(kwdir, 'type_name_keywords.list'))
 reserved_keywords = read_list_from_file(os.path.join(kwdir, 'reserved_keywords.list'))
 
 def strip_p(x):
@@ -37,7 +54,8 @@ def strip_p(x):
 
 unreserved_keywords.sort(key=lambda x: strip_p(x))
 colname_keywords.sort(key=lambda x: strip_p(x))
-type_func_keywords.sort(key=lambda x: strip_p(x))
+func_name_keywords.sort(key=lambda x: strip_p(x))
+type_name_keywords.sort(key=lambda x: strip_p(x))
 reserved_keywords.sort(key=lambda x: strip_p(x))
 
 statements = read_list_from_file(os.path.join(base_dir, 'statements.list'))
@@ -48,22 +66,28 @@ if len(statements) < 0:
 
 # verify there are no duplicate keywords and create big sorted list of keywords
 kwdict = {}
-for kw in zip(unreserved_keywords, colname_keywords, type_func_keywords, reserved_keywords):
-    if kw in kwdict:
-        print("Duplicate keyword: " + kw)
-        exit(1)
-    kwdict[kw] = True
+for kw in unreserved_keywords:
+    kwdict[kw] = 'UNRESERVED_KEYWORD'
 
-kwlist = []
-kwlist += [(x, 'UNRESERVED_KEYWORD') for x in unreserved_keywords]
-kwlist += [(x, 'COL_NAME_KEYWORD') for x in colname_keywords]
-kwlist += [(x, 'TYPE_FUNC_NAME_KEYWORD') for x in type_func_keywords]
-kwlist += [(x, 'RESERVED_KEYWORD') for x in reserved_keywords]
+for kw in colname_keywords:
+    kwdict[kw] = 'COL_NAME_KEYWORD'
+
+for kw in func_name_keywords:
+    kwdict[kw] = 'TYPE_FUNC_NAME_KEYWORD'
+
+for kw in type_name_keywords:
+    kwdict[kw] = 'TYPE_FUNC_NAME_KEYWORD'
+
+for kw in reserved_keywords:
+    kwdict[kw] = 'RESERVED_KEYWORD'
+
+kwlist = [(x, kwdict[x]) for x in kwdict.keys()]
 kwlist.sort(key=lambda x: strip_p(x[0]))
 
 # now generate kwlist.h
 # PG_KEYWORD("abort", ABORT_P, UNRESERVED_KEYWORD)
 kwtext = """
+namespace duckdb_libpgquery {
 #define PG_KEYWORD(a,b,c) {a,b,c},
 
 const PGScanKeyword ScanKeywords[] = {
@@ -74,21 +98,22 @@ kwtext += """
 };
 
 const int NumScanKeywords = lengthof(ScanKeywords);
+} // namespace duckdb_libpgquery
 """
 
-with open(kwlist_header, 'w+') as f:
+with open_utf8(kwlist_header, 'w+') as f:
     f.write(kwtext)
 
 
 # generate the final main.y.tmp file
 # first read the template file
-with open(template_file, 'r') as f:
+with open_utf8(template_file, 'r') as f:
     text = f.read()
 
 # now perform a series of replacements in the file to construct the final yacc file
 
 def get_file_contents(fpath, add_line_numbers=False):
-    with open(fpath, 'r') as f:
+    with open_utf8(fpath, 'r') as f:
         result = f.read()
         if add_line_numbers:
             return '#line 1 "%s"\n' % (fpath,) + result
@@ -112,9 +137,67 @@ stmt_list = "stmt: " + "\n\t| ".join(statements) + "\n\t| /*EMPTY*/\n\t{ $$ = NU
 text = text.replace("{{{ STATEMENTS }}}", stmt_list)
 
 # keywords
+# keywords can EITHER be reserved, unreserved, or some combination of (col_name, type_name, func_name)
+# that means duplicates are ONLY allowed between (col_name, type_name and func_name)
+# having a keyword be both reserved and unreserved is an error
+# as is having a keyword both reserved and col_name, for example
+# verify that this is the case
+reserved_dict = {}
+unreserved_dict = {}
+other_dict = {}
+for r in reserved_keywords:
+    if r in reserved_dict:
+        print("Duplicate keyword " + r + " in reserved keywords")
+        exit(1)
+    reserved_dict[r] = True
+
+for ur in unreserved_keywords:
+    if ur in unreserved_dict:
+        print("Duplicate keyword " + ur + " in unreserved keywords")
+        exit(1)
+    if ur in reserved_dict:
+        print("Keyword " + ur + " is marked as both unreserved and reserved")
+        exit(1)
+    unreserved_dict[ur] = True
+
+def add_to_other_keywords(kw, list_name):
+    global unreserved_dict
+    global reserved_dict
+    if kw in unreserved_dict:
+        print("Keyword " + kw + " is marked as both unreserved and " + list_name)
+        exit(1)
+    if kw in reserved_dict:
+        print("Keyword " + kw + " is marked as both reserved and " + list_name)
+        exit(1)
+    other_dict[cr] = True
+
+for cr in colname_keywords:
+    add_to_other_keywords(cr, "colname")
+
+type_func_name_dict = {}
+for tr in type_name_keywords:
+    add_to_other_keywords(tr, "typename")
+    type_func_name_dict[tr] = True
+
+for fr in func_name_keywords:
+    add_to_other_keywords(fr, "funcname")
+    type_func_name_dict[fr] = True
+
+type_func_name_keywords = list(type_func_name_dict.keys())
+type_func_name_keywords.sort()
+
+all_keywords = list(reserved_dict.keys()) + list(unreserved_dict.keys()) + list(other_dict.keys())
+all_keywords.sort()
+
+other_keyword = list(other_dict.keys())
+other_keyword.sort()
+
 kw_definitions = "unreserved_keyword: " + " | ".join(unreserved_keywords) + "\n"
 kw_definitions += "col_name_keyword: " + " | ".join(colname_keywords) + "\n"
-kw_definitions += "type_func_name_keyword: " + " | ".join(type_func_keywords) + "\n"
+kw_definitions += "func_name_keyword: " + " | ".join(func_name_keywords) + "\n"
+kw_definitions += "type_name_keyword: " + " | ".join(type_name_keywords) + "\n"
+kw_definitions += "other_keyword: " + " | ".join(other_keyword) + "\n"
+kw_definitions += "type_func_name_keyword: " + " | ".join(type_func_name_keywords) + "\n"
 kw_definitions += "reserved_keyword: " + " | ".join(reserved_keywords) + "\n"
 text = text.replace("{{{ KEYWORD_DEFINITIONS }}}", kw_definitions)
 
@@ -144,17 +227,30 @@ grammar_rules = concat_dir(rule_dir, ".y", True)
 text = text.replace("{{{ GRAMMAR RULES }}}", grammar_rules)
 
 # finally write the yacc file into the target file
-with open(target_file, 'w+') as f:
+with open_utf8(target_file, 'w+') as f:
     f.write(text)
 
 # generate the bison
-cmd = [bison_location, "-o", result_source, "-d", target_file]
+cmd = [bison_location]
+if counterexamples:
+    print("Attempting to print counterexamples (-Wcounterexamples)")
+    cmd += ["-Wcounterexamples"]
+if run_update:
+    cmd += ["--update"]
+cmd += ["-o", result_source, "-d", target_file]
 print(' '.join(cmd))
-proc = subprocess.Popen(cmd)
+proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
 res = proc.wait()
 
 if res != 0:
-	exit(1)
+    text = proc.stderr.read().decode('utf8')
+    print(text)
+    if 'shift/reduce' in text and not counterexamples:
+        print("---------------------------------------------------------------------")
+        print("In case of shift/reduce conflicts, try re-running with --counterexamples")
+        print("Note: this requires a more recent version of Bison (e.g. version 3.8)")
+        print("On a Macbook you can obtain this using \"brew install bison\"")
+    exit(1)
 
 os.rename(result_source, target_source_loc)
 os.rename(result_header, target_header_loc)

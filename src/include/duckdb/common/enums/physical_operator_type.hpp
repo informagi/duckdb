@@ -17,31 +17,29 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 enum class PhysicalOperatorType : uint8_t {
 	INVALID,
-	LEAF,
 	ORDER_BY,
 	LIMIT,
+	LIMIT_PERCENT,
 	TOP_N,
-	AGGREGATE,
 	WINDOW,
-	DISTINCT,
+	UNNEST,
 	SIMPLE_AGGREGATE,
 	HASH_GROUP_BY,
-	SORT_GROUP_BY,
+	PERFECT_HASH_GROUP_BY,
 	FILTER,
 	PROJECTION,
-	COPY_FROM_FILE,
 	COPY_TO_FILE,
-	TABLE_FUNCTION,
+	RESERVOIR_SAMPLE,
+	STREAMING_SAMPLE,
+	STREAMING_WINDOW,
 	// -----------------------------
 	// Scans
 	// -----------------------------
+	TABLE_SCAN,
 	DUMMY_SCAN,
-	SEQ_SCAN,
-	INDEX_SCAN,
 	CHUNK_SCAN,
+	RECURSIVE_CTE_SCAN,
 	DELIM_SCAN,
-	EXTERNAL_FILE_SCAN,
-	QUERY_DERIVED_SCAN,
 	EXPRESSION_SCAN,
 	// -----------------------------
 	// Joins
@@ -52,7 +50,7 @@ enum class PhysicalOperatorType : uint8_t {
 	CROSS_PRODUCT,
 	PIECEWISE_MERGE_JOIN,
 	DELIM_JOIN,
-
+	INDEX_JOIN,
 	// -----------------------------
 	// SetOps
 	// -----------------------------
@@ -63,32 +61,38 @@ enum class PhysicalOperatorType : uint8_t {
 	// Updates
 	// -----------------------------
 	INSERT,
-	INSERT_SELECT,
-	DELETE,
+	DELETE_OPERATOR,
 	UPDATE,
-	EXPORT_EXTERNAL_FILE,
 
 	// -----------------------------
 	// Schema
 	// -----------------------------
-	CREATE,
+	CREATE_TABLE,
+	CREATE_TABLE_AS,
 	CREATE_INDEX,
 	ALTER,
 	CREATE_SEQUENCE,
 	CREATE_VIEW,
 	CREATE_SCHEMA,
+	CREATE_MACRO,
 	DROP,
 	PRAGMA,
 	TRANSACTION,
+	CREATE_TYPE,
 
 	// -----------------------------
 	// Helpers
 	// -----------------------------
-	PRUNE_COLUMNS,
 	EXPLAIN,
+	EXPLAIN_ANALYZE,
 	EMPTY_RESULT,
 	EXECUTE,
-	PREPARE
+	PREPARE,
+	VACUUM,
+	EXPORT,
+	SET,
+	LOAD,
+	INOUT_FUNCTION
 };
 
 string PhysicalOperatorToString(PhysicalOperatorType type);

@@ -9,36 +9,40 @@
 #pragma once
 
 #include "duckdb/storage/checkpoint_manager.hpp"
-#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
-class UncompressedSegment;
+class CheckpointManager;
+class ColumnData;
+class ColumnSegment;
+class RowGroup;
+class BaseStatistics;
 class SegmentStatistics;
 
 //! The table data writer is responsible for writing the data of a table to the block manager
 class TableDataWriter {
+	friend class ColumnData;
+
 public:
-	TableDataWriter(CheckpointManager &manager, TableCatalogEntry &table);
+	TableDataWriter(DatabaseInstance &db, CheckpointManager &checkpoint_manager, TableCatalogEntry &table,
+	                MetaBlockWriter &meta_writer);
 	~TableDataWriter();
 
-	void WriteTableData(Transaction &transaction);
+	BlockPointer WriteTableData();
+
+	MetaBlockWriter &GetMetaWriter() {
+		return meta_writer;
+	}
+
+	CheckpointManager &GetCheckpointManager() {
+		return checkpoint_manager;
+	}
+
+	CompressionType GetColumnCompressionType(idx_t i);
 
 private:
-	void AppendData(idx_t col_idx, Vector &data);
-
-	void CreateSegment(idx_t col_idx);
-	void FlushSegment(idx_t col_idx);
-
-	void WriteDataPointers();
-
-private:
-	CheckpointManager &manager;
+	CheckpointManager &checkpoint_manager;
 	TableCatalogEntry &table;
-
-	vector<unique_ptr<UncompressedSegment>> segments;
-	vector<unique_ptr<SegmentStatistics>> stats;
-
-	vector<vector<DataPointer>> data_pointers;
+	MetaBlockWriter &meta_writer;
 };
 
 } // namespace duckdb

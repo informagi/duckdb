@@ -5,6 +5,10 @@
 #ifndef RE2_STRINGPIECE_H_
 #define RE2_STRINGPIECE_H_
 
+#ifdef min
+#undef min
+#endif
+
 // A string-like object that points to a sized piece of memory.
 //
 // Functions or methods may use const StringPiece& parameters to accept either
@@ -34,7 +38,7 @@
 #include <string_view>
 #endif
 
-namespace re2 {
+namespace duckdb_re2 {
 
 class StringPiece {
  public:
@@ -205,6 +209,6 @@ inline bool operator>=(const StringPiece& x, const StringPiece& y) {
 // Allow StringPiece to be logged.
 std::ostream& operator<<(std::ostream& o, const StringPiece& p);
 
-}  // namespace re2
+}  // namespace duckdb_re2
 
 #endif  // RE2_STRINGPIECE_H_

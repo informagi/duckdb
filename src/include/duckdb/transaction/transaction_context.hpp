@@ -9,9 +9,11 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/assert.hpp"
 
 namespace duckdb {
 
+class ClientContext;
 class Transaction;
 class TransactionManager;
 
@@ -19,14 +21,13 @@ class TransactionManager;
 //! current transaction
 class TransactionContext {
 public:
-	TransactionContext(TransactionManager &transaction_manager)
-	    : transaction_manager(transaction_manager), auto_commit(true), is_invalidated(false),
-	      current_transaction(nullptr) {
+	TransactionContext(TransactionManager &transaction_manager, ClientContext &context)
+	    : transaction_manager(transaction_manager), context(context), auto_commit(true), current_transaction(nullptr) {
 	}
 	~TransactionContext();
 
 	Transaction &ActiveTransaction() {
-		assert(current_transaction);
+		D_ASSERT(current_transaction);
 		return *current_transaction;
 	}
 
@@ -38,22 +39,17 @@ public:
 	void BeginTransaction();
 	void Commit();
 	void Rollback();
+	void ClearTransaction();
 
-	void SetAutoCommit(bool value) {
-		auto_commit = value;
-	}
+	void SetAutoCommit(bool value);
 	bool IsAutoCommit() {
 		return auto_commit;
 	}
 
-	void Invalidate() {
-		is_invalidated = true;
-	}
-
 private:
 	TransactionManager &transaction_manager;
+	ClientContext &context;
 	bool auto_commit;
-	bool is_invalidated;
 
 	Transaction *current_transaction;
 

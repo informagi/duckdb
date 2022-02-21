@@ -26,10 +26,10 @@ struct ValueOperations {
 	static Value Divide(const Value &left, const Value &right);
 	// A % B
 	static Value Modulo(const Value &left, const Value &right);
-	// MIN(A, B)
-	static Value Min(const Value &left, const Value &right);
-	// MAX(A, B)
-	static Value Max(const Value &left, const Value &right);
+	// // MIN(A, B)
+	// static Value Min(const Value &left, const Value &right);
+	// // MAX(A, B)
+	// static Value Max(const Value &left, const Value &right);
 	//===--------------------------------------------------------------------===//
 	// Comparison Operations
 	//===--------------------------------------------------------------------===//
@@ -46,9 +46,24 @@ struct ValueOperations {
 	// A <= B
 	static bool LessThanEquals(const Value &left, const Value &right);
 	//===--------------------------------------------------------------------===//
+	// Distinction Operations
+	//===--------------------------------------------------------------------===//
+	// A == B, NULLs equal
+	static bool NotDistinctFrom(const Value &left, const Value &right);
+	// A != B, NULLs equal
+	static bool DistinctFrom(const Value &left, const Value &right);
+	// A > B, NULLs last
+	static bool DistinctGreaterThan(const Value &left, const Value &right);
+	// A >= B, NULLs last
+	static bool DistinctGreaterThanEquals(const Value &left, const Value &right);
+	// A < B, NULLs last
+	static bool DistinctLessThan(const Value &left, const Value &right);
+	// A <= B, NULLs last
+	static bool DistinctLessThanEquals(const Value &left, const Value &right);
+	//===--------------------------------------------------------------------===//
 	// Hash functions
 	//===--------------------------------------------------------------------===//
 	// result = HASH(A)
-	static uint64_t Hash(const Value &left);
+	static hash_t Hash(const Value &left);
 };
 } // namespace duckdb

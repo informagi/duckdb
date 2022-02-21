@@ -1,8 +1,7 @@
 #include "duckdb/function/scalar/math_functions.hpp"
 #include "duckdb/common/exception.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 void BuiltinFunctions::RegisterMathFunctions() {
 	Register<AbsFun>();
@@ -26,4 +25,17 @@ void BuiltinFunctions::RegisterMathFunctions() {
 	Register<SqrtFun>();
 
 	Register<PiFun>();
+
+	Register<BitCountFun>();
+
+	Register<GammaFun>();
+	Register<LogGammaFun>();
+
+	Register<FactorialFun>();
+
+	Register<NextAfterFun>();
+
+	Register<EvenFun>();
 }
+
+} // namespace duckdb

@@ -15,8 +15,8 @@ namespace duckdb {
 //! A BoundReferenceExpression represents a physical index into a DataChunk
 class BoundReferenceExpression : public Expression {
 public:
-	BoundReferenceExpression(string alias, TypeId type, idx_t index);
-	BoundReferenceExpression(TypeId type, idx_t index);
+	BoundReferenceExpression(string alias, LogicalType type, idx_t index);
+	BoundReferenceExpression(LogicalType type, idx_t index);
 
 	//! Index used to access data in the chunks
 	idx_t index;
@@ -31,7 +31,7 @@ public:
 
 	string ToString() const override;
 
-	uint64_t Hash() const override;
+	hash_t Hash() const override;
 	bool Equals(const BaseExpression *other) const override;
 
 	unique_ptr<Expression> Copy() override;

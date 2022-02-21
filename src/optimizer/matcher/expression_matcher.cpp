@@ -2,8 +2,7 @@
 
 #include "duckdb/planner/expression/list.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 bool ExpressionMatcher::Match(Expression *expr, vector<Expression *> &bindings) {
 	if (type && !type->Match(expr->return_type)) {
@@ -27,67 +26,60 @@ bool ExpressionEqualityMatcher::Match(Expression *expr, vector<Expression *> &bi
 	return true;
 }
 
-bool CaseExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
-		return false;
-	}
-	auto expr = (BoundCaseExpression *)expr_;
-	if (check && !check->Match(expr->check.get(), bindings)) {
-		return false;
-	}
-	if (result_if_true && !result_if_true->Match(expr->result_if_true.get(), bindings)) {
-		return false;
-	}
-	if (result_if_false && !result_if_false->Match(expr->result_if_false.get(), bindings)) {
+bool CaseExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
 		return false;
 	}
 	return true;
 }
 
-bool CastExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
+bool ComparisonExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
 		return false;
 	}
-	auto expr = (BoundCastExpression *)expr_;
-	if (child && !child->Match(expr->child.get(), bindings)) {
-		return false;
-	}
-	return true;
-}
-
-bool ComparisonExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
-		return false;
-	}
-	auto expr = (BoundComparisonExpression *)expr_;
+	auto expr = (BoundComparisonExpression *)expr_p;
 	vector<Expression *> expressions = {expr->left.get(), expr->right.get()};
 	return SetMatcher::Match(matchers, expressions, bindings, policy);
 }
 
-bool ConjunctionExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
+bool CastExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
 		return false;
 	}
-	auto expr = (BoundConjunctionExpression *)expr_;
+	if (!matcher) {
+		return true;
+	}
+	auto expr = (BoundCastExpression *)expr_p;
+	return matcher->Match(expr->child.get(), bindings);
+}
+
+bool InClauseExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
+		return false;
+	}
+	auto expr = (BoundOperatorExpression *)expr_p;
+	if (expr->type != ExpressionType::COMPARE_IN || expr->type == ExpressionType::COMPARE_NOT_IN) {
+		return false;
+	}
+	return SetMatcher::Match(matchers, expr->children, bindings, policy);
+}
+
+bool ConjunctionExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
+		return false;
+	}
+	auto expr = (BoundConjunctionExpression *)expr_p;
 	if (!SetMatcher::Match(matchers, expr->children, bindings, policy)) {
 		return false;
 	}
 	return true;
 }
 
-bool OperatorExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
+bool FunctionExpressionMatcher::Match(Expression *expr_p, vector<Expression *> &bindings) {
+	if (!ExpressionMatcher::Match(expr_p, bindings)) {
 		return false;
 	}
-	auto expr = (BoundOperatorExpression *)expr_;
-	return SetMatcher::Match(matchers, expr->children, bindings, policy);
-}
-
-bool FunctionExpressionMatcher::Match(Expression *expr_, vector<Expression *> &bindings) {
-	if (!ExpressionMatcher::Match(expr_, bindings)) {
-		return false;
-	}
-	auto expr = (BoundFunctionExpression *)expr_;
+	auto expr = (BoundFunctionExpression *)expr_p;
 	if (!FunctionMatcher::Match(function, expr->function.name)) {
 		return false;
 	}
@@ -105,3 +97,5 @@ bool FoldableConstantMatcher::Match(Expression *expr, vector<Expression *> &bind
 	bindings.push_back(expr);
 	return true;
 }
+
+} // namespace duckdb

@@ -9,20 +9,10 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-
-#include <chrono>  // chrono::system_clock
-#include <ctime>   // localtime
-#include <iomanip> // put_time
-#include <sstream> // stringstream
-#include <string>  // string
+#include "duckdb/common/types.hpp"
+#include "duckdb/common/winapi.hpp"
 
 namespace duckdb {
-
-struct Interval {
-	int64_t time;
-	int32_t days;   //! days, after time for alignment
-	int32_t months; //! months after time for alignment
-};
 
 struct timestamp_struct {
 	int32_t year;
@@ -37,31 +27,53 @@ struct timestamp_struct {
 //! type.
 class Timestamp {
 public:
+	// min timestamp is 290308-12-22 (BC)
+	constexpr static const int32_t MIN_YEAR = -290308;
+	constexpr static const int32_t MIN_MONTH = 12;
+	constexpr static const int32_t MIN_DAY = 22;
+
+public:
 	//! Convert a string in the format "YYYY-MM-DD hh:mm:ss" to a timestamp object
-	static timestamp_t FromString(string str);
-	//! Convert a date object to a string in the format "YYYY-MM-DDThh:mm:ssZ"
-	static string ToString(timestamp_t timestamp);
+	DUCKDB_API static timestamp_t FromString(const string &str);
+	DUCKDB_API static bool TryConvertTimestamp(const char *str, idx_t len, timestamp_t &result);
+	DUCKDB_API static timestamp_t FromCString(const char *str, idx_t len);
+	//! Convert a date object to a string in the format "YYYY-MM-DD hh:mm:ss"
+	DUCKDB_API static string ToString(timestamp_t timestamp);
 
-	static date_t GetDate(timestamp_t timestamp);
+	DUCKDB_API static date_t GetDate(timestamp_t timestamp);
 
-	static dtime_t GetTime(timestamp_t timestamp);
+	DUCKDB_API static dtime_t GetTime(timestamp_t timestamp);
 	//! Create a Timestamp object from a specified (date, time) combination
-	static timestamp_t FromDatetime(date_t date, dtime_t time);
+	DUCKDB_API static timestamp_t FromDatetime(date_t date, dtime_t time);
+	DUCKDB_API static bool TryFromDatetime(date_t date, dtime_t time, timestamp_t &result);
+
 	//! Extract the date and time from a given timestamp object
-	static void Convert(timestamp_t date, date_t &out_date, dtime_t &out_time);
+	DUCKDB_API static void Convert(timestamp_t date, date_t &out_date, dtime_t &out_time);
 	//! Returns current timestamp
-	static timestamp_t GetCurrentTimestamp();
-	//! Gets the timestamp which correspondes to the difference between the given ones
-	static Interval GetDifference(timestamp_t timestamp_a, timestamp_t timestamp_b);
+	DUCKDB_API static timestamp_t GetCurrentTimestamp();
 
-	static timestamp_struct IntervalToTimestamp(Interval &interval);
+	//! Convert the epoch (in sec) to a timestamp
+	DUCKDB_API static timestamp_t FromEpochSeconds(int64_t ms);
+	//! Convert the epoch (in ms) to a timestamp
+	DUCKDB_API static timestamp_t FromEpochMs(int64_t ms);
+	//! Convert the epoch (in microseconds) to a timestamp
+	DUCKDB_API static timestamp_t FromEpochMicroSeconds(int64_t micros);
+	//! Convert the epoch (in nanoseconds) to a timestamp
+	DUCKDB_API static timestamp_t FromEpochNanoSeconds(int64_t micros);
 
-	// Unix epoch: milliseconds since 1970
-	static int64_t GetEpoch(timestamp_t timestamp);
-	// Seconds including fractional part multiplied by 1000
-	static int64_t GetMilliseconds(timestamp_t timestamp);
-	static int64_t GetSeconds(timestamp_t timestamp);
-	static int64_t GetMinutes(timestamp_t timestamp);
-	static int64_t GetHours(timestamp_t timestamp);
+	//! Convert the epoch (in seconds) to a timestamp
+	DUCKDB_API static int64_t GetEpochSeconds(timestamp_t timestamp);
+	//! Convert the epoch (in ms) to a timestamp
+	DUCKDB_API static int64_t GetEpochMs(timestamp_t timestamp);
+	//! Convert a timestamp to epoch (in microseconds)
+	DUCKDB_API static int64_t GetEpochMicroSeconds(timestamp_t timestamp);
+	//! Convert a timestamp to epoch (in nanoseconds)
+	DUCKDB_API static int64_t GetEpochNanoSeconds(timestamp_t timestamp);
+
+	DUCKDB_API static bool TryParseUTCOffset(const char *str, idx_t &pos, idx_t len, int &hour_offset,
+	                                         int &minute_offset);
+
+	DUCKDB_API static string ConversionError(const string &str);
+	DUCKDB_API static string ConversionError(string_t str);
 };
 } // namespace duckdb

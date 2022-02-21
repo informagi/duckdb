@@ -1,8 +1,10 @@
 #include "catch.hpp"
-#include "duckdb/execution/index/art/art_key.hpp"
+#include "duckdb/common/radix.hpp"
 #include "duckdb/common/types/string_type.hpp"
-#include <iostream>
+#include "duckdb/execution/index/art/art_key.hpp"
+
 #include <cstring>
+#include <iostream>
 
 using namespace duckdb;
 using namespace std;
@@ -17,16 +19,16 @@ static void TestKeyEqual(Key &left, Key &right) {
 	REQUIRE(!(right > left));
 }
 
-static void TestKeyBigger(Key &big, Key &small) {
-	REQUIRE(!(big == small));
-	if (!(big >= small)) {
+static void TestKeyBigger(Key &big_key, Key &small_key) {
+	REQUIRE(!(big_key == small_key));
+	if (!(big_key >= small_key)) {
 		REQUIRE(0);
 	}
-	REQUIRE(big > small);
+	REQUIRE(big_key > small_key);
 
-	REQUIRE(!(small == big));
-	REQUIRE(!(small >= big));
-	REQUIRE(!(small > big));
+	REQUIRE(!(small_key == big_key));
+	REQUIRE(!(small_key >= big_key));
+	REQUIRE(!(small_key > big_key));
 }
 
 static void TestKeys(vector<unique_ptr<Key>> &keys) {
@@ -123,6 +125,55 @@ TEST_CASE("Test correct functioning of art keys", "[art]") {
 
 	keys.clear();
 
+	// Test utiny int
+	keys.push_back(Key::CreateKey<uint8_t>(0, is_little_endian));
+	keys.push_back(Key::CreateKey<uint8_t>(1, is_little_endian));
+	keys.push_back(Key::CreateKey<uint8_t>(55, is_little_endian));
+	keys.push_back(Key::CreateKey<uint8_t>(127, is_little_endian));
+	keys.push_back(Key::CreateKey<uint8_t>(200, is_little_endian));
+	keys.push_back(Key::CreateKey<uint8_t>(250, is_little_endian));
+	TestKeys(keys);
+
+	keys.clear();
+
+	// Test small int
+	keys.push_back(Key::CreateKey<uint16_t>(0, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(1, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(55, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(127, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(32767, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(40000, is_little_endian));
+	keys.push_back(Key::CreateKey<uint16_t>(60000, is_little_endian));
+
+	TestKeys(keys);
+
+	keys.clear();
+
+	// Test int
+	keys.push_back(Key::CreateKey<uint32_t>(0, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(1, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(32767, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(8388608, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(2147483647, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(3047483647, is_little_endian));
+	keys.push_back(Key::CreateKey<uint32_t>(4047483647, is_little_endian));
+	TestKeys(keys);
+
+	keys.clear();
+
+	// Test big int
+	keys.push_back(Key::CreateKey<uint64_t>(0, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(1, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(32767, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(8388608, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(2147483647, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(1099511627776, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(281474976710656, is_little_endian));
+	keys.push_back(Key::CreateKey<uint64_t>(72057594037927936, is_little_endian));
+	TestKeys(keys);
+
+	keys.clear();
+
 	// Test strings
 	keys.push_back(Key::CreateKey<const char *>("abc", is_little_endian));
 	keys.push_back(Key::CreateKey<const char *>("babababa", is_little_endian));
@@ -150,6 +201,15 @@ TEST_CASE("Test correct functioning of art keys", "[art]") {
 	TestKeys(keys);
 
 	keys.clear();
+
+	keys.push_back(Key::CreateKey<double>(0, is_little_endian));
+	keys.push_back(Key::CreateKey<double>(0.1, is_little_endian));
+	keys.push_back(Key::CreateKey<double>(488566, is_little_endian));
+	keys.push_back(Key::CreateKey<double>(1163404482, is_little_endian));
+
+	TestKeys(keys);
+
+	keys.clear();
 }
 
 TEST_CASE("Test correct functioning of art EncodeFloat/EncodeDouble", "[art-enc]") {
@@ -169,9 +229,9 @@ TEST_CASE("Test correct functioning of art EncodeFloat/EncodeDouble", "[art-enc]
 			current_value *= 2;
 		}
 		std::sort(values.begin(), values.end());
-		uint32_t current_encoded = Key::EncodeFloat(values[0]);
+		uint32_t current_encoded = EncodeFloat(values[0]);
 		for (idx_t i = 1; i < values.size(); i++) {
-			uint32_t next_encoded = Key::EncodeFloat(values[i]);
+			uint32_t next_encoded = EncodeFloat(values[i]);
 			if (!(next_encoded > current_encoded)) {
 				printf("Failure in Key::EncodeFloat!\n");
 				printf(
@@ -198,9 +258,9 @@ TEST_CASE("Test correct functioning of art EncodeFloat/EncodeDouble", "[art-enc]
 			current_value *= 2;
 		}
 		std::sort(values.begin(), values.end());
-		uint64_t current_encoded = Key::EncodeDouble(values[0]);
+		uint64_t current_encoded = EncodeDouble(values[0]);
 		for (idx_t i = 1; i < values.size(); i++) {
-			uint64_t next_encoded = Key::EncodeDouble(values[i]);
+			uint64_t next_encoded = EncodeDouble(values[i]);
 			if (!(next_encoded > current_encoded)) {
 				cout << "Failure in Key::EncodeDouble!" << std::endl;
 				cout << "Generated value for key " << values[i - 1] << " (=> %" << current_encoded

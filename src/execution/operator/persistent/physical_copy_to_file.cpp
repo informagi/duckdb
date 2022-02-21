@@ -2,207 +2,96 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include <algorithm>
-#include <fstream>
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-class BufferedWriter {
-	constexpr static idx_t BUFFER_SIZE = 4096 * 4;
-
+class CopyToFunctionGlobalState : public GlobalSinkState {
 public:
-	BufferedWriter(string &path) : pos(0) {
-		to_csv.open(path);
-		if (to_csv.fail()) {
-			throw IOException("Could not open CSV file");
-		}
+	explicit CopyToFunctionGlobalState(unique_ptr<GlobalFunctionData> global_state)
+	    : rows_copied(0), global_state(move(global_state)) {
 	}
 
-	void Flush() {
-		if (pos > 0) {
-			to_csv.write(buffer, pos);
-			pos = 0;
-		}
-	}
-
-	void Close() {
-		Flush();
-		to_csv.close();
-	}
-
-	void Write(const char *buf, idx_t len) {
-		if (len >= BUFFER_SIZE) {
-			Flush();
-			to_csv.write(buf, len);
-			return;
-		}
-		if (pos + len > BUFFER_SIZE) {
-			Flush();
-		}
-		memcpy(buffer + pos, buf, len);
-		pos += len;
-	}
-
-	void Write(string &value) {
-		Write(value.c_str(), value.size());
-	}
-
-private:
-	char buffer[BUFFER_SIZE];
-	idx_t pos = 0;
-
-	ofstream to_csv;
+	idx_t rows_copied;
+	unique_ptr<GlobalFunctionData> global_state;
 };
 
-string AddEscapes(string &to_be_escaped, string escape, string val) {
-	idx_t i = 0;
-	string new_val = "";
-	idx_t found = val.find(to_be_escaped);
+class CopyToFunctionLocalState : public LocalSinkState {
+public:
+	explicit CopyToFunctionLocalState(unique_ptr<LocalFunctionData> local_state) : local_state(move(local_state)) {
+	}
+	unique_ptr<LocalFunctionData> local_state;
+};
 
-	while (found != string::npos) {
-		while (i < found) {
-			new_val += val[i];
-			i++;
-		}
-		new_val += escape;
-		found = val.find(to_be_escaped, found + escape.length());
-	}
-	while (i < val.length()) {
-		new_val += val[i];
-		i++;
-	}
-	return new_val;
+//===--------------------------------------------------------------------===//
+// Sink
+//===--------------------------------------------------------------------===//
+PhysicalCopyToFile::PhysicalCopyToFile(vector<LogicalType> types, CopyFunction function_p,
+                                       unique_ptr<FunctionData> bind_data, idx_t estimated_cardinality)
+    : PhysicalOperator(PhysicalOperatorType::COPY_TO_FILE, move(types), estimated_cardinality),
+      function(move(function_p)), bind_data(move(bind_data)) {
 }
 
-static void WriteQuotedString(BufferedWriter &writer, string_t str_value, string &delimiter, string &quote,
-                              string &escape, string &null_str, bool write_quoted) {
-	// used for adding escapes
-	bool add_escapes = false;
-	auto str_data = str_value.GetData();
-	string new_val(str_data, str_value.GetSize());
+SinkResultType PhysicalCopyToFile::Sink(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate,
+                                        DataChunk &input) const {
+	auto &g = (CopyToFunctionGlobalState &)gstate;
+	auto &l = (CopyToFunctionLocalState &)lstate;
 
-	// check for \n, \r, \n\r in string
-	if (!write_quoted) {
-		for (idx_t i = 0; i < str_value.GetSize(); i++) {
-			if (str_data[i] == '\n' || str_data[i] == '\r') {
-				// newline, write a quoted string
-				write_quoted = true;
-			}
-		}
-	}
+	g.rows_copied += input.size();
+	function.copy_to_sink(context.client, *bind_data, *g.global_state, *l.local_state, input);
+	return SinkResultType::NEED_MORE_INPUT;
+}
 
-	// check if value is null string
-	if (!write_quoted) {
-		if (new_val == null_str) {
-			write_quoted = true;
-		}
-	}
+void PhysicalCopyToFile::Combine(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate) const {
+	auto &g = (CopyToFunctionGlobalState &)gstate;
+	auto &l = (CopyToFunctionLocalState &)lstate;
 
-	// check for delimiter
-	if (!write_quoted) {
-		if (new_val.find(delimiter) != string::npos) {
-			write_quoted = true;
-		}
-	}
-
-	// check for quote
-	if (new_val.find(quote) != string::npos) {
-		write_quoted = true;
-		add_escapes = true;
-	}
-
-	// check for escapes in quoted string
-	if (write_quoted && !add_escapes) {
-		if (new_val.find(escape) != string::npos) {
-			add_escapes = true;
-		}
-	}
-
-	if (add_escapes) {
-		new_val = AddEscapes(escape, escape, new_val);
-		// also escape quotes
-		if (escape != quote) {
-			new_val = AddEscapes(quote, escape, new_val);
-		}
-	}
-
-	if (!write_quoted) {
-		writer.Write(new_val);
-	} else {
-		writer.Write(quote);
-		writer.Write(new_val);
-		writer.Write(quote);
+	if (function.copy_to_combine) {
+		function.copy_to_combine(context.client, *bind_data, *g.global_state, *l.local_state);
 	}
 }
 
-void PhysicalCopyToFile::GetChunkInternal(ClientContext &context, DataChunk &chunk, PhysicalOperatorState *state) {
-	auto &info = *this->info;
-	idx_t total = 0;
-
-	string newline = "\n";
-	BufferedWriter writer(info.file_path);
-	if (info.header) {
-		// write the header line
-		for (idx_t i = 0; i < names.size(); i++) {
-			if (i != 0) {
-				writer.Write(info.delimiter);
-			}
-			WriteQuotedString(writer, names[i].c_str(), info.delimiter, info.quote, info.escape, info.null_str, false);
-		}
-		writer.Write(newline);
+SinkFinalizeType PhysicalCopyToFile::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+                                              GlobalSinkState &gstate_p) const {
+	auto &gstate = (CopyToFunctionGlobalState &)gstate_p;
+	if (function.copy_to_finalize) {
+		function.copy_to_finalize(context, *bind_data, *gstate.global_state);
 	}
-	// create a chunk with VARCHAR columns
-	vector<TypeId> types;
-	for (idx_t col_idx = 0; col_idx < state->child_chunk.column_count(); col_idx++) {
-		types.push_back(TypeId::VARCHAR);
-	}
-	DataChunk cast_chunk;
-	cast_chunk.Initialize(types);
+	return SinkFinalizeType::READY;
+}
 
-	while (true) {
-		children[0]->GetChunk(context, state->child_chunk, state->child_state.get());
-		if (state->child_chunk.size() == 0) {
-			break;
-		}
-		// cast the columns of the chunk to varchar
-		cast_chunk.SetCardinality(state->child_chunk);
-		for (idx_t col_idx = 0; col_idx < state->child_chunk.column_count(); col_idx++) {
-			if (sql_types[col_idx].id == SQLTypeId::VARCHAR) {
-				// VARCHAR, just create a reference
-				cast_chunk.data[col_idx].Reference(state->child_chunk.data[col_idx]);
-			} else {
-				// non varchar column, perform the cast
-				VectorOperations::Cast(state->child_chunk.data[col_idx], cast_chunk.data[col_idx], sql_types[col_idx],
-				                       SQLType::VARCHAR);
-			}
-		}
-		// now loop over the vectors and output the values
-		VectorOperations::Exec(cast_chunk.data[0], [&](idx_t i, idx_t k) {
-			// write values
-			for (idx_t col_idx = 0; col_idx < state->child_chunk.column_count(); col_idx++) {
-				if (col_idx != 0) {
-					writer.Write(info.delimiter);
-				}
-				if (cast_chunk.data[col_idx].nullmask[i]) {
-					// write null value
-					writer.Write(info.null_str);
-					continue;
-				}
+unique_ptr<LocalSinkState> PhysicalCopyToFile::GetLocalSinkState(ExecutionContext &context) const {
+	return make_unique<CopyToFunctionLocalState>(function.copy_to_initialize_local(context.client, *bind_data));
+}
+unique_ptr<GlobalSinkState> PhysicalCopyToFile::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<CopyToFunctionGlobalState>(function.copy_to_initialize_global(context, *bind_data));
+}
 
-				// non-null value, fetch the string value from the cast chunk
-				auto str_data = (string_t *)cast_chunk.data[col_idx].GetData();
-				auto str_value = str_data[i];
-				WriteQuotedString(writer, str_value, info.delimiter, info.quote, info.escape, info.null_str,
-				                  info.force_quote[col_idx]);
-			}
-			writer.Write(newline);
-		});
-		total += cast_chunk.size();
+//===--------------------------------------------------------------------===//
+// Source
+//===--------------------------------------------------------------------===//
+class CopyToFileState : public GlobalSourceState {
+public:
+	CopyToFileState() : finished(false) {
 	}
-	writer.Close();
+
+	bool finished;
+};
+
+unique_ptr<GlobalSourceState> PhysicalCopyToFile::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<CopyToFileState>();
+}
+
+void PhysicalCopyToFile::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate,
+                                 LocalSourceState &lstate) const {
+	auto &state = (CopyToFileState &)gstate;
+	auto &g = (CopyToFunctionGlobalState &)*sink_state;
+	if (state.finished) {
+		return;
+	}
 
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value::BIGINT(total));
-
-	state->finished = true;
+	chunk.SetValue(0, 0, Value::BIGINT(g.rows_copied));
+	state.finished = true;
 }
+
+} // namespace duckdb

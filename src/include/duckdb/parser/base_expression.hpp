@@ -25,11 +25,11 @@ public:
 	}
 
 	//! Returns the type of the expression
-	ExpressionType GetExpressionType() {
+	ExpressionType GetExpressionType() const {
 		return type;
 	}
 	//! Returns the class of the expression
-	ExpressionClass GetExpressionClass() {
+	ExpressionClass GetExpressionClass() const {
 		return expression_class;
 	}
 
@@ -60,9 +60,7 @@ public:
 	virtual bool HasParameter() const = 0;
 
 	//! Get the name of the expression
-	virtual string GetName() const {
-		return !alias.empty() ? alias : ToString();
-	}
+	virtual string GetName() const;
 	//! Convert the Expression to a String
 	virtual string ToString() const = 0;
 	//! Print the expression to stdout
@@ -70,7 +68,7 @@ public:
 
 	//! Creates a hash value of this expression. It is important that if two expressions are identical (i.e.
 	//! Expression::Equals() returns true), that their hash value is identical as well.
-	virtual uint64_t Hash() const = 0;
+	virtual hash_t Hash() const = 0;
 	//! Returns true if this expression is equal to another expression
 	virtual bool Equals(const BaseExpression *other) const;
 

@@ -1,20 +1,20 @@
 #include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/transformer.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
-unique_ptr<TableRef> Transformer::TransformRangeSubselect(PGRangeSubselect *root) {
-	auto subquery = TransformSelectNode((PGSelectStmt *)root->subquery);
+unique_ptr<TableRef> Transformer::TransformRangeSubselect(duckdb_libpgquery::PGRangeSubselect *root) {
+	Transformer subquery_transformer(this);
+	auto subquery = subquery_transformer.TransformSelect(root->subquery);
 	if (!subquery) {
 		return nullptr;
 	}
 	auto result = make_unique<SubqueryRef>(move(subquery));
-	result->alias = TransformAlias(root->alias);
-	if (root->alias->colnames) {
-		for (auto node = root->alias->colnames->head; node != nullptr; node = node->next) {
-			result->column_name_alias.push_back(reinterpret_cast<PGValue *>(node->data.ptr_value)->val.str);
-		}
+	result->alias = TransformAlias(root->alias, result->column_name_alias);
+	if (root->sample) {
+		result->sample = TransformSampleOptions(root->sample);
 	}
 	return move(result);
 }
+
+} // namespace duckdb

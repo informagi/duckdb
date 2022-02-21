@@ -2,8 +2,11 @@
 
 #include "duckdb/common/serializer.hpp"
 
-using namespace std;
-using namespace duckdb;
+namespace duckdb {
+
+CheckConstraint::CheckConstraint(unique_ptr<ParsedExpression> expression)
+    : Constraint(ConstraintType::CHECK), expression(move(expression)) {
+}
 
 string CheckConstraint::ToString() const {
 	return "CHECK(" + expression->ToString() + ")";
@@ -22,3 +25,5 @@ unique_ptr<Constraint> CheckConstraint::Deserialize(Deserializer &source) {
 	auto expression = ParsedExpression::Deserialize(source);
 	return make_unique<CheckConstraint>(move(expression));
 }
+
+} // namespace duckdb

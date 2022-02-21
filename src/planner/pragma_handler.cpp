@@ -1,44 +1,82 @@
 #include "duckdb/planner/pragma_handler.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/parser/parser.hpp"
 
-#include "duckdb/parser/statement/select_statement.hpp"
-#include "duckdb/parser/query_node/select_node.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
-#include "duckdb/parser/expression/star_expression.hpp"
-#include "duckdb/parser/tableref/table_function_ref.hpp"
-#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/pragma_function_catalog_entry.hpp"
 
 #include "duckdb/parser/parsed_data/pragma_info.hpp"
+#include "duckdb/function/function.hpp"
+
+#include "duckdb/main/client_context.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/file_system.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 PragmaHandler::PragmaHandler(ClientContext &context) : context(context) {
 }
 
-unique_ptr<SQLStatement> PragmaHandler::HandlePragma(PragmaInfo &pragma) {
-	string keyword = StringUtil::Lower(pragma.name);
-	if (keyword == "table_info") {
-		if (pragma.pragma_type != PragmaType::CALL) {
-			throw ParserException("Invalid PRAGMA table_info: expected table name");
+void PragmaHandler::HandlePragmaStatementsInternal(vector<unique_ptr<SQLStatement>> &statements) {
+	vector<unique_ptr<SQLStatement>> new_statements;
+	for (idx_t i = 0; i < statements.size(); i++) {
+		if (statements[i]->type == StatementType::PRAGMA_STATEMENT) {
+			// PRAGMA statement: check if we need to replace it by a new set of statements
+			PragmaHandler handler(context);
+			auto new_query = handler.HandlePragma(statements[i].get()); //*((PragmaStatement &)*statements[i]).info
+			if (!new_query.empty()) {
+				// this PRAGMA statement gets replaced by a new query string
+				// push the new query string through the parser again and add it to the transformer
+				Parser parser;
+				parser.ParseQuery(new_query);
+				// insert the new statements and remove the old statement
+				// FIXME: off by one here maybe?
+				for (idx_t j = 0; j < parser.statements.size(); j++) {
+					new_statements.push_back(move(parser.statements[j]));
+				}
+				continue;
+			}
 		}
-		if (pragma.parameters.size() != 1) {
-			throw ParserException("Invalid PRAGMA table_info: table_info takes exactly one argument");
-		}
-		// generate a SelectStatement that selects from the pragma_table_info function
-		// i.e. SELECT * FROM pragma_table_info('table_name')
-		auto select_statement = make_unique<SelectStatement>();
-		auto select_node = make_unique<SelectNode>();
-		select_node->select_list.push_back(make_unique<StarExpression>());
-
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(make_unique<ConstantExpression>(SQLTypeId::VARCHAR, pragma.parameters[0]));
-		auto table_function = make_unique<TableFunctionRef>();
-		table_function->function = make_unique<FunctionExpression>(DEFAULT_SCHEMA, "pragma_table_info", children);
-		select_node->from_table = move(table_function);
-		select_statement->node = move(select_node);
-		return move(select_statement);
+		new_statements.push_back(move(statements[i]));
 	}
-	return nullptr;
+	statements = move(new_statements);
 }
+
+void PragmaHandler::HandlePragmaStatements(ClientContextLock &lock, vector<unique_ptr<SQLStatement>> &statements) {
+	// first check if there are any pragma statements
+	bool found_pragma = false;
+	for (idx_t i = 0; i < statements.size(); i++) {
+		if (statements[i]->type == StatementType::PRAGMA_STATEMENT) {
+			found_pragma = true;
+			break;
+		}
+	}
+	if (!found_pragma) {
+		// no pragmas: skip this step
+		return;
+	}
+	context.RunFunctionInTransactionInternal(lock, [&]() { HandlePragmaStatementsInternal(statements); });
+}
+
+string PragmaHandler::HandlePragma(SQLStatement *statement) { // PragmaInfo &info
+	auto info = *((PragmaStatement &)*statement).info;
+	auto entry =
+	    Catalog::GetCatalog(context).GetEntry<PragmaFunctionCatalogEntry>(context, DEFAULT_SCHEMA, info.name, false);
+	string error;
+	idx_t bound_idx = Function::BindFunction(entry->name, entry->functions, info, error);
+	if (bound_idx == DConstants::INVALID_INDEX) {
+		throw BinderException(error);
+	}
+	auto &bound_function = entry->functions[bound_idx];
+	if (bound_function.query) {
+		QueryErrorContext error_context(statement, statement->stmt_location);
+		Binder::BindNamedParameters(bound_function.named_parameters, info.named_parameters, error_context,
+		                            bound_function.name);
+		FunctionParameters parameters {info.parameters, info.named_parameters};
+		return bound_function.query(context, parameters);
+	}
+	return string();
+}
+
+} // namespace duckdb

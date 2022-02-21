@@ -20,7 +20,7 @@ namespace duckdb {
 //! The ExpressionMatcher class contains a set of matchers that can be used to pattern match Expressions
 class ExpressionMatcher {
 public:
-	ExpressionMatcher(ExpressionClass type = ExpressionClass::INVALID) : expr_class(type) {
+	explicit ExpressionMatcher(ExpressionClass type = ExpressionClass::INVALID) : expr_class(type) {
 	}
 	virtual ~ExpressionMatcher() {
 	}
@@ -40,7 +40,8 @@ public:
 //! The ExpressionEqualityMatcher matches on equality with another (given) expression
 class ExpressionEqualityMatcher : public ExpressionMatcher {
 public:
-	ExpressionEqualityMatcher(Expression *expr) : ExpressionMatcher(ExpressionClass::INVALID), expression(expr) {
+	explicit ExpressionEqualityMatcher(Expression *expr)
+	    : ExpressionMatcher(ExpressionClass::INVALID), expression(expr) {
 	}
 
 	bool Match(Expression *expr, vector<Expression *> &bindings) override;
@@ -59,12 +60,19 @@ class CaseExpressionMatcher : public ExpressionMatcher {
 public:
 	CaseExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_CASE) {
 	}
-	//! The check expression to match (if any)
-	unique_ptr<ExpressionMatcher> check;
-	//! The result_if_true expression to match (if any)
-	unique_ptr<ExpressionMatcher> result_if_true;
-	//! The result_if_false expression to match (if any)
-	unique_ptr<ExpressionMatcher> result_if_false;
+
+	bool Match(Expression *expr_, vector<Expression *> &bindings) override;
+};
+
+class ComparisonExpressionMatcher : public ExpressionMatcher {
+public:
+	ComparisonExpressionMatcher()
+	    : ExpressionMatcher(ExpressionClass::BOUND_COMPARISON), policy(SetMatcher::Policy::INVALID) {
+	}
+	//! The matchers for the child expressions
+	vector<unique_ptr<ExpressionMatcher>> matchers;
+	//! The set matcher matching policy to use
+	SetMatcher::Policy policy;
 
 	bool Match(Expression *expr_, vector<Expression *> &bindings) override;
 };
@@ -73,15 +81,15 @@ class CastExpressionMatcher : public ExpressionMatcher {
 public:
 	CastExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_CAST) {
 	}
-	//! The child expression to match (if any)
-	unique_ptr<ExpressionMatcher> child;
+	//! The matcher for the child expressions
+	unique_ptr<ExpressionMatcher> matcher;
 
 	bool Match(Expression *expr_, vector<Expression *> &bindings) override;
 };
 
-class ComparisonExpressionMatcher : public ExpressionMatcher {
+class InClauseExpressionMatcher : public ExpressionMatcher {
 public:
-	ComparisonExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_COMPARISON) {
+	InClauseExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_OPERATOR) {
 	}
 	//! The matchers for the child expressions
 	vector<unique_ptr<ExpressionMatcher>> matchers;
@@ -93,19 +101,8 @@ public:
 
 class ConjunctionExpressionMatcher : public ExpressionMatcher {
 public:
-	ConjunctionExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_CONJUNCTION) {
-	}
-	//! The matchers for the child expressions
-	vector<unique_ptr<ExpressionMatcher>> matchers;
-	//! The set matcher matching policy to use
-	SetMatcher::Policy policy;
-
-	bool Match(Expression *expr_, vector<Expression *> &bindings) override;
-};
-
-class OperatorExpressionMatcher : public ExpressionMatcher {
-public:
-	OperatorExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_OPERATOR) {
+	ConjunctionExpressionMatcher()
+	    : ExpressionMatcher(ExpressionClass::BOUND_CONJUNCTION), policy(SetMatcher::Policy::INVALID) {
 	}
 	//! The matchers for the child expressions
 	vector<unique_ptr<ExpressionMatcher>> matchers;

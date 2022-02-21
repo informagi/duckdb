@@ -5,60 +5,74 @@
 
 #include <functional>
 
-using namespace std;
-
 namespace duckdb {
 
-template <> uint64_t Hash(uint64_t val) {
+template <>
+hash_t Hash(uint64_t val) {
 	return murmurhash64(val);
 }
 
-template <> uint64_t Hash(int64_t val) {
+template <>
+hash_t Hash(int64_t val) {
 	return murmurhash64((uint64_t)val);
 }
 
-template <> uint64_t Hash(float val) {
-	return std::hash<float>{}(val);
+template <>
+hash_t Hash(hugeint_t val) {
+	return murmurhash64(val.lower) ^ murmurhash64(val.upper);
 }
 
-template <> uint64_t Hash(double val) {
-	return std::hash<double>{}(val);
+template <>
+hash_t Hash(float val) {
+	return std::hash<float> {}(val);
 }
 
-template <> uint64_t Hash(const char *str) {
-	uint64_t hash = 5381;
-	uint64_t c;
-
-	while ((c = *str++)) {
-		hash = ((hash << 5) + hash) + c;
-	}
-
-	return hash;
+template <>
+hash_t Hash(double val) {
+	return std::hash<double> {}(val);
 }
 
-template <> uint64_t Hash(string_t val) {
-	return Hash(val.GetData(), val.GetSize());
+template <>
+hash_t Hash(interval_t val) {
+	return Hash(val.days) ^ Hash(val.months) ^ Hash(val.micros);
 }
 
-template <> uint64_t Hash(char *val) {
+template <>
+hash_t Hash(const char *str) {
+	return Hash(str, strlen(str));
+}
+
+template <>
+hash_t Hash(string_t val) {
+	return Hash(val.GetDataUnsafe(), val.GetSize());
+}
+
+template <>
+hash_t Hash(char *val) {
 	return Hash<const char *>(val);
 }
 
-uint64_t Hash(const char *val, size_t size) {
-	uint64_t hash = 5381;
-
-	for (size_t i = 0; i < size; i++) {
-		hash = ((hash << 5) + hash) + val[i];
+// Jenkins hash function: https://en.wikipedia.org/wiki/Jenkins_hash_function
+uint32_t JenkinsOneAtATimeHash(const char *key, size_t length) {
+	size_t i = 0;
+	uint32_t hash = 0;
+	while (i != length) {
+		hash += key[i++];
+		hash += hash << 10;
+		hash ^= hash >> 6;
 	}
-
+	hash += hash << 3;
+	hash ^= hash >> 11;
+	hash += hash << 15;
 	return hash;
 }
 
-uint64_t Hash(char *val, size_t size) {
-	return Hash((const char *)val, size);
+hash_t Hash(const char *val, size_t size) {
+	auto hash_val = JenkinsOneAtATimeHash(val, size);
+	return Hash<uint32_t>(hash_val);
 }
 
-uint64_t Hash(uint8_t *val, size_t size) {
+hash_t Hash(uint8_t *val, size_t size) {
 	return Hash((const char *)val, size);
 }
 

@@ -14,8 +14,10 @@
 namespace duckdb {
 
 struct CreateFunctionInfo : public CreateInfo {
-	CreateFunctionInfo(CatalogType type) : CreateInfo(type) {
-		assert(type == CatalogType::SCALAR_FUNCTION || type == CatalogType::AGGREGATE_FUNCTION);
+	explicit CreateFunctionInfo(CatalogType type, string schema = DEFAULT_SCHEMA) : CreateInfo(type, schema) {
+		D_ASSERT(type == CatalogType::SCALAR_FUNCTION_ENTRY || type == CatalogType::AGGREGATE_FUNCTION_ENTRY ||
+		         type == CatalogType::TABLE_FUNCTION_ENTRY || type == CatalogType::PRAGMA_FUNCTION_ENTRY ||
+		         type == CatalogType::MACRO_ENTRY);
 	}
 
 	//! Function name

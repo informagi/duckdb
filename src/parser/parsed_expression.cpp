@@ -5,8 +5,7 @@
 #include "duckdb/parser/expression/list.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 
-using namespace duckdb;
-using namespace std;
+namespace duckdb {
 
 bool ParsedExpression::IsAggregate() const {
 	bool is_aggregate = false;
@@ -47,18 +46,18 @@ bool ParsedExpression::HasSubquery() const {
 }
 
 bool ParsedExpression::Equals(const BaseExpression *other) const {
-	if (other->expression_class == ExpressionClass::BOUND_EXPRESSION) {
-		auto bound_expr = (BoundExpression *)other;
-		other = bound_expr->parsed_expr.get();
-	}
 	if (!BaseExpression::Equals(other)) {
 		return false;
 	}
 	switch (expression_class) {
+	case ExpressionClass::BETWEEN:
+		return BetweenExpression::Equals((BetweenExpression *)this, (BetweenExpression *)other);
 	case ExpressionClass::CASE:
 		return CaseExpression::Equals((CaseExpression *)this, (CaseExpression *)other);
 	case ExpressionClass::CAST:
 		return CastExpression::Equals((CastExpression *)this, (CastExpression *)other);
+	case ExpressionClass::COLLATE:
+		return CollateExpression::Equals((CollateExpression *)this, (CollateExpression *)other);
 	case ExpressionClass::COLUMN_REF:
 		return ColumnRefExpression::Equals((ColumnRefExpression *)this, (ColumnRefExpression *)other);
 	case ExpressionClass::COMPARISON:
@@ -71,25 +70,28 @@ bool ParsedExpression::Equals(const BaseExpression *other) const {
 		return true;
 	case ExpressionClass::FUNCTION:
 		return FunctionExpression::Equals((FunctionExpression *)this, (FunctionExpression *)other);
+	case ExpressionClass::LAMBDA:
+		return LambdaExpression::Equals((LambdaExpression *)this, (LambdaExpression *)other);
 	case ExpressionClass::OPERATOR:
 		return OperatorExpression::Equals((OperatorExpression *)this, (OperatorExpression *)other);
 	case ExpressionClass::PARAMETER:
 		return true;
+	case ExpressionClass::POSITIONAL_REFERENCE:
+		return PositionalReferenceExpression::Equals((PositionalReferenceExpression *)this,
+		                                             (PositionalReferenceExpression *)other);
 	case ExpressionClass::STAR:
-		return true;
-	case ExpressionClass::TABLE_STAR:
-		return TableStarExpression::Equals((TableStarExpression *)this, (TableStarExpression *)other);
+		return StarExpression::Equals((StarExpression *)this, (StarExpression *)other);
 	case ExpressionClass::SUBQUERY:
 		return SubqueryExpression::Equals((SubqueryExpression *)this, (SubqueryExpression *)other);
 	case ExpressionClass::WINDOW:
 		return WindowExpression::Equals((WindowExpression *)this, (WindowExpression *)other);
 	default:
-		throw SerializationException("Unsupported type for expression deserialization!");
+		throw SerializationException("Unsupported type for expression comparison!");
 	}
 }
 
-uint64_t ParsedExpression::Hash() const {
-	uint64_t hash = duckdb::Hash<uint32_t>((uint32_t)type);
+hash_t ParsedExpression::Hash() const {
+	hash_t hash = duckdb::Hash<uint32_t>((uint32_t)type);
 	ParsedExpressionIterator::EnumerateChildren(
 	    *this, [&](const ParsedExpression &child) { hash = CombineHash(child.Hash(), hash); });
 	return hash;
@@ -107,11 +109,17 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &source)
 	auto alias = source.Read<string>();
 	unique_ptr<ParsedExpression> result;
 	switch (expression_class) {
+	case ExpressionClass::BETWEEN:
+		result = BetweenExpression::Deserialize(type, source);
+		break;
 	case ExpressionClass::CASE:
 		result = CaseExpression::Deserialize(type, source);
 		break;
 	case ExpressionClass::CAST:
 		result = CastExpression::Deserialize(type, source);
+		break;
+	case ExpressionClass::COLLATE:
+		result = CollateExpression::Deserialize(type, source);
 		break;
 	case ExpressionClass::COLUMN_REF:
 		result = ColumnRefExpression::Deserialize(type, source);
@@ -131,17 +139,20 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &source)
 	case ExpressionClass::FUNCTION:
 		result = FunctionExpression::Deserialize(type, source);
 		break;
+	case ExpressionClass::LAMBDA:
+		result = LambdaExpression::Deserialize(type, source);
+		break;
 	case ExpressionClass::OPERATOR:
 		result = OperatorExpression::Deserialize(type, source);
 		break;
 	case ExpressionClass::PARAMETER:
 		result = ParameterExpression::Deserialize(type, source);
 		break;
+	case ExpressionClass::POSITIONAL_REFERENCE:
+		result = PositionalReferenceExpression::Deserialize(type, source);
+		break;
 	case ExpressionClass::STAR:
 		result = StarExpression::Deserialize(type, source);
-		break;
-	case ExpressionClass::TABLE_STAR:
-		result = TableStarExpression::Deserialize(type, source);
 		break;
 	case ExpressionClass::SUBQUERY:
 		result = SubqueryExpression::Deserialize(type, source);
@@ -155,3 +166,5 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &source)
 	result->alias = alias;
 	return result;
 }
+
+} // namespace duckdb
