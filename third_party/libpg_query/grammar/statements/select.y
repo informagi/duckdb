@@ -378,6 +378,26 @@ opt_sort_clause:
 
 sort_clause:
 			ORDER BY sortby_list					{ $$ = $3; }
+			| ORDER BY ALL opt_asc_desc opt_nulls_order
+				{
+					PGSortBy *sort = makeNode(PGSortBy);
+					sort->node = (PGNode *) makeNode(PGAStar);
+					sort->sortby_dir = $4;
+					sort->sortby_nulls = $5;
+					sort->useOp = NIL;
+					sort->location = -1;		/* no operator */
+					$$ = list_make1(sort);
+				}
+			| ORDER BY '*' opt_asc_desc opt_nulls_order
+				{
+					PGSortBy *sort = makeNode(PGSortBy);
+					sort->node = (PGNode *) makeNode(PGAStar);
+					sort->sortby_dir = $4;
+					sort->sortby_nulls = $5;
+					sort->useOp = NIL;
+					sort->location = -1;		/* no operator */
+					$$ = list_make1(sort);
+				}
 		;
 
 sortby_list:
@@ -624,6 +644,16 @@ first_or_next: FIRST_P								{ $$ = 0; }
  */
 group_clause:
 			GROUP_P BY group_by_list				{ $$ = $3; }
+			| GROUP_P BY ALL
+				{
+					PGNode *node = (PGNode *) makeGroupingSet(GROUPING_SET_ALL, NIL, @3);
+					$$ = list_make1(node);
+				}
+			| GROUP_P BY '*'
+				{
+					PGNode *node = (PGNode *) makeGroupingSet(GROUPING_SET_ALL, NIL, @3);
+					$$ = list_make1(node);
+				}
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -1777,11 +1807,10 @@ a_expr:		c_expr									{ $$ = $1; }
 				}
 			| a_expr ILIKE a_expr ESCAPE a_expr					%prec ILIKE
 				{
-					PGFuncCall *n = makeFuncCall(SystemFuncName("like_escape"),
-											   list_make2($3, $5),
+					PGFuncCall *n = makeFuncCall(SystemFuncName("ilike_escape"),
+											   list_make3($1, $3, $5),
 											   @2);
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_ILIKE, "~~*",
-												   $1, (PGNode *) n, @2);
+					$$ = (PGNode *) n;
 				}
 			| a_expr NOT_LA ILIKE a_expr						%prec NOT_LA
 				{
@@ -1790,11 +1819,10 @@ a_expr:		c_expr									{ $$ = $1; }
 				}
 			| a_expr NOT_LA ILIKE a_expr ESCAPE a_expr			%prec NOT_LA
 				{
-					PGFuncCall *n = makeFuncCall(SystemFuncName("not_like_escape"),
-											   list_make2($4, $6),
+					PGFuncCall *n = makeFuncCall(SystemFuncName("not_ilike_escape"),
+											   list_make3($1, $4, $6),
 											   @2);
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_ILIKE, "!~~*",
-												   $1, (PGNode *) n, @2);
+					$$ = (PGNode *) n;
 				}
 
 			| a_expr SIMILAR TO a_expr							%prec SIMILAR
@@ -2364,7 +2392,7 @@ func_application: func_name '(' ')'
  * (Note that many of the special SQL functions wouldn't actually make any
  * sense as functional index entries, but we ignore that consideration here.)
  */
-func_expr: func_application within_group_clause filter_clause over_clause
+func_expr: func_application within_group_clause filter_clause export_clause over_clause
 				{
 					PGFuncCall *n = (PGFuncCall *) $1;
 					/*
@@ -2396,7 +2424,8 @@ func_expr: func_application within_group_clause filter_clause over_clause
 						n->agg_within_group = true;
 					}
 					n->agg_filter = $3;
-					n->over = $4;
+					n->export_state = $4;
+					n->over = $5;
 					$$ = (PGNode *) n;
 				}
 			| func_expr_common_subexpr
@@ -2574,6 +2603,10 @@ filter_clause:
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
+export_clause:
+			EXPORT_STATE            				{ $$ = true; }
+			| /*EMPTY*/								{ $$ = false; }
+		;
 
 /*
  * Window Definitions

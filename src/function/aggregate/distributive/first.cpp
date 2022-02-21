@@ -232,7 +232,6 @@ static AggregateFunction GetFirstFunction(const LogicalType &type) {
 		return GetFirstAggregateTemplated<int16_t, LAST>(type);
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::DATE_TZ:
 		return GetFirstAggregateTemplated<int32_t, LAST>(type);
 	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::TIME:
@@ -291,6 +290,7 @@ unique_ptr<FunctionData> BindDecimalFirst(ClientContext &context, AggregateFunct
                                           vector<unique_ptr<Expression>> &arguments) {
 	auto decimal_type = arguments[0]->return_type;
 	function = GetFirstFunction<LAST>(decimal_type);
+	function.name = "first";
 	function.return_type = decimal_type;
 	return nullptr;
 }

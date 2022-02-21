@@ -27,7 +27,6 @@ static AggregateFunction GetUnaryAggregate(LogicalType type) {
 	case LogicalTypeId::SMALLINT:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int16_t>, int16_t, int16_t, OP>(type, type);
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::DATE_TZ:
 	case LogicalTypeId::INTEGER:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int32_t>, int32_t, int32_t, OP>(type, type);
 	case LogicalTypeId::TIMESTAMP:
@@ -495,6 +494,7 @@ template <class OP>
 unique_ptr<FunctionData> BindDecimalMinMax(ClientContext &context, AggregateFunction &function,
                                            vector<unique_ptr<Expression>> &arguments) {
 	auto decimal_type = arguments[0]->return_type;
+	auto name = function.name;
 	switch (decimal_type.InternalType()) {
 	case PhysicalType::INT16:
 		function = GetUnaryAggregate<OP>(LogicalType::SMALLINT);
@@ -509,6 +509,7 @@ unique_ptr<FunctionData> BindDecimalMinMax(ClientContext &context, AggregateFunc
 		function = GetUnaryAggregate<OP>(LogicalType::HUGEINT);
 		break;
 	}
+	function.name = move(name);
 	function.arguments[0] = decimal_type;
 	function.return_type = decimal_type;
 	return nullptr;

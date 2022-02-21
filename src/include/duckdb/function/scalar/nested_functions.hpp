@@ -16,7 +16,7 @@ namespace duckdb {
 struct VariableReturnBindData : public FunctionData {
 	LogicalType stype;
 
-	explicit VariableReturnBindData(LogicalType stype) : stype(stype) {
+	explicit VariableReturnBindData(const LogicalType &stype_p) : stype(stype_p) {
 	}
 
 	unique_ptr<FunctionData> Copy() override {
@@ -53,6 +53,11 @@ struct ListExtractFun {
 };
 
 struct ListConcatFun {
+	static ScalarFunction GetFunction();
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ListContainsFun {
 	static ScalarFunction GetFunction();
 	static void RegisterFunction(BuiltinFunctions &set);
 };
