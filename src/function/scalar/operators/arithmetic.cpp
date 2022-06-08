@@ -153,7 +153,8 @@ static unique_ptr<BaseStatistics> PropagateNumericStats(ClientContext &context, 
 		// no potential overflow: replace with non-overflowing operator
 		expr.function.function = GetScalarIntegerFunction<BASEOP>(expr.return_type.InternalType());
 	}
-	auto stats = make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max));
+	auto stats =
+	    make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max), StatisticsType::LOCAL_STATS);
 	stats->validity_stats = ValidityStatistics::Combine(lstats.validity_stats, rstats.validity_stats);
 	return move(stats);
 }
@@ -367,6 +368,16 @@ struct NegateOperator {
 };
 
 template <>
+bool NegateOperator::CanNegate(float input) {
+	return Value::FloatIsFinite(input);
+}
+
+template <>
+bool NegateOperator::CanNegate(double input) {
+	return Value::DoubleIsFinite(input);
+}
+
+template <>
 interval_t NegateOperator::Operation(interval_t input) {
 	interval_t result;
 	result.months = NegateOperator::Operation<int32_t, int32_t>(input.months);
@@ -448,7 +459,8 @@ static unique_ptr<BaseStatistics> NegateBindStatistics(ClientContext &context, B
 		new_min = Value(expr.return_type);
 		new_max = Value(expr.return_type);
 	}
-	auto stats = make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max));
+	auto stats =
+	    make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max), StatisticsType::LOCAL_STATS);
 	if (istats.validity_stats) {
 		stats->validity_stats = istats.validity_stats->Copy();
 	}
@@ -665,23 +677,23 @@ void MultiplyFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet functions("*");
 	for (auto &type : LogicalType::Numeric()) {
 		if (type.id() == LogicalTypeId::DECIMAL) {
-			functions.AddFunction(ScalarFunction({type, type}, type, nullptr, false, BindDecimalMultiply));
+			functions.AddFunction(ScalarFunction({type, type}, type, nullptr, true, false, BindDecimalMultiply));
 		} else if (TypeIsIntegral(type.InternalType()) && type.id() != LogicalTypeId::HUGEINT) {
 			functions.AddFunction(ScalarFunction(
-			    {type, type}, type, GetScalarIntegerFunction<MultiplyOperatorOverflowCheck>(type.InternalType()), false,
-			    nullptr, nullptr,
+			    {type, type}, type, GetScalarIntegerFunction<MultiplyOperatorOverflowCheck>(type.InternalType()), true,
+			    false, nullptr, nullptr,
 			    PropagateNumericStats<TryMultiplyOperator, MultiplyPropagateStatistics, MultiplyOperator>));
 		} else {
-			functions.AddFunction(
-			    ScalarFunction({type, type}, type, GetScalarBinaryFunction<MultiplyOperator>(type.InternalType())));
+			functions.AddFunction(ScalarFunction({type, type}, type,
+			                                     GetScalarBinaryFunction<MultiplyOperator>(type.InternalType()), true));
 		}
 	}
 	functions.AddFunction(
 	    ScalarFunction({LogicalType::INTERVAL, LogicalType::BIGINT}, LogicalType::INTERVAL,
-	                   ScalarFunction::BinaryFunction<interval_t, int64_t, interval_t, MultiplyOperator>));
+	                   ScalarFunction::BinaryFunction<interval_t, int64_t, interval_t, MultiplyOperator>, true));
 	functions.AddFunction(
 	    ScalarFunction({LogicalType::BIGINT, LogicalType::INTERVAL}, LogicalType::INTERVAL,
-	                   ScalarFunction::BinaryFunction<int64_t, interval_t, interval_t, MultiplyOperator>));
+	                   ScalarFunction::BinaryFunction<int64_t, interval_t, interval_t, MultiplyOperator>, true));
 	set.AddFunction(functions);
 }
 
@@ -691,7 +703,7 @@ void MultiplyFun::RegisterFunction(BuiltinFunctions &set) {
 template <>
 float DivideOperator::Operation(float left, float right) {
 	auto result = left / right;
-	if (!Value::FloatIsValid(result)) {
+	if (!Value::FloatIsFinite(result)) {
 		throw OutOfRangeException("Overflow in division of float!");
 	}
 	return result;
@@ -700,7 +712,7 @@ float DivideOperator::Operation(float left, float right) {
 template <>
 double DivideOperator::Operation(double left, double right) {
 	auto result = left / right;
-	if (!Value::DoubleIsValid(result)) {
+	if (!Value::DoubleIsFinite(result)) {
 		throw OutOfRangeException("Overflow in division of double!");
 	}
 	return result;
@@ -812,13 +824,21 @@ void DivideFun::RegisterFunction(BuiltinFunctions &set) {
 template <>
 float ModuloOperator::Operation(float left, float right) {
 	D_ASSERT(right != 0);
-	return std::fmod(left, right);
+	auto result = std::fmod(left, right);
+	if (!Value::FloatIsFinite(result)) {
+		throw OutOfRangeException("Overflow in modulo of float!");
+	}
+	return result;
 }
 
 template <>
 double ModuloOperator::Operation(double left, double right) {
 	D_ASSERT(right != 0);
-	return std::fmod(left, right);
+	auto result = std::fmod(left, right);
+	if (!Value::DoubleIsFinite(result)) {
+		throw OutOfRangeException("Overflow in modulo of double!");
+	}
+	return result;
 }
 
 template <>

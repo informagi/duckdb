@@ -3,16 +3,14 @@
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/arrow.hpp"
 #include "duckdb/common/vector.hpp"
+#include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
 
-BaseQueryResult::BaseQueryResult(QueryResultType type, StatementType statement_type)
-    : type(type), statement_type(statement_type), success(true) {
-}
-
-BaseQueryResult::BaseQueryResult(QueryResultType type, StatementType statement_type, vector<LogicalType> types_p,
-                                 vector<string> names_p)
-    : type(type), statement_type(statement_type), types(move(types_p)), names(move(names_p)), success(true) {
+BaseQueryResult::BaseQueryResult(QueryResultType type, StatementType statement_type, StatementProperties properties,
+                                 vector<LogicalType> types_p, vector<string> names_p)
+    : type(type), statement_type(statement_type), properties(properties), types(move(types_p)), names(move(names_p)),
+      success(true) {
 	D_ASSERT(types.size() == names.size());
 }
 
@@ -32,12 +30,9 @@ idx_t BaseQueryResult::ColumnCount() {
 	return types.size();
 }
 
-QueryResult::QueryResult(QueryResultType type, StatementType statement_type) : BaseQueryResult(type, statement_type) {
-}
-
-QueryResult::QueryResult(QueryResultType type, StatementType statement_type, vector<LogicalType> types_p,
-                         vector<string> names_p)
-    : BaseQueryResult(type, statement_type, move(types_p), move(names_p)) {
+QueryResult::QueryResult(QueryResultType type, StatementType statement_type, StatementProperties properties,
+                         vector<LogicalType> types_p, vector<string> names_p)
+    : BaseQueryResult(type, statement_type, properties, move(types_p), move(names_p)) {
 }
 
 QueryResult::QueryResult(QueryResultType type, string error) : BaseQueryResult(type, move(error)) {
@@ -155,9 +150,11 @@ void InitializeChild(ArrowSchema &child, const string &name = "") {
 	child.metadata = nullptr;
 	child.dictionary = nullptr;
 }
-void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type);
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    string &config_timezone);
 
-void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type) {
+void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                       string &config_timezone) {
 	child.format = "+m";
 	//! Map has one child which is a struct
 	child.n_children = 1;
@@ -172,10 +169,11 @@ void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child,
 	struct_child_types.push_back(std::make_pair("key", ListType::GetChildType(StructType::GetChildType(type, 0))));
 	struct_child_types.push_back(std::make_pair("value", ListType::GetChildType(StructType::GetChildType(type, 1))));
 	auto struct_type = LogicalType::STRUCT(move(struct_child_types));
-	SetArrowFormat(root_holder, *child.children[0], struct_type);
+	SetArrowFormat(root_holder, *child.children[0], struct_type, config_timezone);
 }
 
-void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type) {
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    string &config_timezone) {
 	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN:
 		child.format = "b";
@@ -226,9 +224,19 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 		child.format = "ttu";
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
 		child.format = "tsu:";
 		break;
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		string format = "tsu:" + config_timezone;
+		unique_ptr<char[]> format_ptr = unique_ptr<char[]>(new char[format.size() + 1]);
+		for (size_t i = 0; i < format.size(); i++) {
+			format_ptr[i] = format[i];
+		}
+		format_ptr[format.size()] = '\0';
+		root_holder.owned_type_names.push_back(move(format_ptr));
+		child.format = root_holder.owned_type_names.back().get();
+		break;
+	}
 	case LogicalTypeId::TIMESTAMP_SEC:
 		child.format = "tss:";
 		break;
@@ -272,7 +280,7 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 		InitializeChild(root_holder.nested_children.back()[0]);
 		child.children = &root_holder.nested_children_ptr.back()[0];
 		child.children[0]->name = "l";
-		SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type));
+		SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type), config_timezone);
 		break;
 	}
 	case LogicalTypeId::STRUCT: {
@@ -300,12 +308,12 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 			root_holder.owned_type_names.push_back(move(name_ptr));
 
 			child.children[type_idx]->name = root_holder.owned_type_names.back().get();
-			SetArrowFormat(root_holder, *child.children[type_idx], child_types[type_idx].second);
+			SetArrowFormat(root_holder, *child.children[type_idx], child_types[type_idx].second, config_timezone);
 		}
 		break;
 	}
 	case LogicalTypeId::MAP: {
-		SetArrowMapFormat(root_holder, child, type);
+		SetArrowMapFormat(root_holder, child, type, config_timezone);
 		break;
 	}
 	case LogicalTypeId::ENUM: {
@@ -336,20 +344,22 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 	}
 }
 
-void QueryResult::ToArrowSchema(ArrowSchema *out_schema) {
+void QueryResult::ToArrowSchema(ArrowSchema *out_schema, vector<LogicalType> &types, vector<string> &names,
+                                string &config_timezone) {
 	D_ASSERT(out_schema);
-
+	D_ASSERT(types.size() == names.size());
+	idx_t column_count = types.size();
 	// Allocate as unique_ptr first to cleanup properly on error
 	auto root_holder = make_unique<DuckDBArrowSchemaHolder>();
 
 	// Allocate the children
-	root_holder->children.resize(ColumnCount());
-	root_holder->children_ptrs.resize(ColumnCount(), nullptr);
-	for (size_t i = 0; i < ColumnCount(); ++i) {
+	root_holder->children.resize(column_count);
+	root_holder->children_ptrs.resize(column_count, nullptr);
+	for (size_t i = 0; i < column_count; ++i) {
 		root_holder->children_ptrs[i] = &root_holder->children[i];
 	}
 	out_schema->children = root_holder->children_ptrs.data();
-	out_schema->n_children = ColumnCount();
+	out_schema->n_children = column_count;
 
 	// Store the schema
 	out_schema->format = "+s"; // struct apparently
@@ -359,16 +369,33 @@ void QueryResult::ToArrowSchema(ArrowSchema *out_schema) {
 	out_schema->dictionary = nullptr;
 
 	// Configure all child schemas
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
+	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
 
 		auto &child = root_holder->children[col_idx];
 		InitializeChild(child, names[col_idx]);
-		SetArrowFormat(*root_holder, child, types[col_idx]);
+		SetArrowFormat(*root_holder, child, types[col_idx], config_timezone);
 	}
 
 	// Release ownership to caller
 	out_schema->private_data = root_holder.release();
 	out_schema->release = ReleaseDuckDBArrowSchema;
+}
+
+string QueryResult::GetConfigTimezone(QueryResult &query_result) {
+	switch (query_result.type) {
+	case QueryResultType::MATERIALIZED_RESULT: {
+		auto actual_context = ((MaterializedQueryResult &)query_result).context.lock();
+		if (!actual_context) {
+			throw std::runtime_error("This connection is closed");
+		}
+		return ClientConfig::ExtractTimezoneFromConfig(actual_context->config);
+	}
+	case QueryResultType::STREAM_RESULT: {
+		return ClientConfig::ExtractTimezoneFromConfig(((StreamQueryResult &)query_result).context->config);
+	}
+	default:
+		throw std::runtime_error("Can't extract timezone configuration from query type ");
+	}
 }
 
 } // namespace duckdb

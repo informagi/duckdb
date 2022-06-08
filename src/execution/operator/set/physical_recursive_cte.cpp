@@ -9,6 +9,7 @@
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/parallel/event.hpp"
+#include "duckdb/parallel/pipeline.hpp"
 
 namespace duckdb {
 
@@ -115,6 +116,11 @@ void PhysicalRecursiveCTE::ExecuteRecursivePipelines(ExecutionContext &context) 
 			// reset the sink state for any intermediate sinks
 			sink->sink_state = sink->GetGlobalSinkState(context.client);
 		}
+		for (auto &op : pipeline->GetOperators()) {
+			if (op) {
+				op->op_state = op->GetGlobalOperatorState(context.client);
+			}
+		}
 		pipeline->Reset();
 	}
 	auto &executor = pipelines[0]->executor;
@@ -139,6 +145,40 @@ void PhysicalRecursiveCTE::ExecuteRecursivePipelines(ExecutionContext &context) 
 			break;
 		}
 	}
+}
+
+//===--------------------------------------------------------------------===//
+// Pipeline Construction
+//===--------------------------------------------------------------------===//
+void PhysicalRecursiveCTE::BuildPipelines(Executor &executor, Pipeline &current, PipelineBuildState &state) {
+	op_state.reset();
+	sink_state.reset();
+
+	// recursive CTE
+	state.SetPipelineSource(current, this);
+	// the LHS of the recursive CTE is our initial state
+	// we build this pipeline as normal
+	auto pipeline_child = children[0].get();
+	// for the RHS, we gather all pipelines that depend on the recursive cte
+	// these pipelines need to be rerun
+	if (state.recursive_cte) {
+		throw InternalException("Recursive CTE detected WITHIN a recursive CTE node");
+	}
+	state.recursive_cte = this;
+
+	auto recursive_pipeline = make_shared<Pipeline>(executor);
+	state.SetPipelineSink(*recursive_pipeline, this);
+	children[1]->BuildPipelines(executor, *recursive_pipeline, state);
+
+	pipelines.push_back(move(recursive_pipeline));
+
+	state.recursive_cte = nullptr;
+
+	BuildChildPipeline(executor, current, state, pipeline_child);
+}
+
+vector<const PhysicalOperator *> PhysicalRecursiveCTE::GetSources() const {
+	return {this};
 }
 
 } // namespace duckdb

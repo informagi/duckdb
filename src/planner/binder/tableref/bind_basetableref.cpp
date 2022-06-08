@@ -62,14 +62,15 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 	}
 	// not a CTE
 	// extract a table or view from the catalog
+	auto &catalog = Catalog::GetCatalog(context);
 	auto table_or_view =
-	    Catalog::GetCatalog(context).GetEntry(context, CatalogType::TABLE_ENTRY, ref.schema_name, ref.table_name,
-	                                          ref.schema_name.empty() ? true : false, error_context);
+	    catalog.GetEntry(context, CatalogType::TABLE_ENTRY, ref.schema_name, ref.table_name, true, error_context);
 	if (!table_or_view) {
+		auto table_name = ref.schema_name.empty() ? ref.table_name : (ref.schema_name + "." + ref.table_name);
 		// table could not be found: try to bind a replacement scan
 		auto &config = DBConfig::GetConfig(context);
 		for (auto &scan : config.replacement_scans) {
-			auto replacement_function = scan.function(ref.table_name, scan.data);
+			auto replacement_function = scan.function(context, table_name, scan.data.get());
 			if (replacement_function) {
 				replacement_function->alias = ref.alias.empty() ? ref.table_name : ref.alias;
 				replacement_function->column_name_alias = ref.column_name_alias;
@@ -79,11 +80,11 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 		// we still didn't find the table
 		if (GetBindingMode() == BindingMode::EXTRACT_NAMES) {
 			// if we are in EXTRACT_NAMES, we create a dummy table ref
-			AddTableName(ref.table_name);
+			AddTableName(table_name);
 
 			// add a bind context entry
 			auto table_index = GenerateTableIndex();
-			auto alias = ref.alias.empty() ? ref.table_name : ref.alias;
+			auto alias = ref.alias.empty() ? table_name : ref.alias;
 			vector<LogicalType> types {LogicalType::INTEGER};
 			vector<string> names {"__dummy_col" + to_string(table_index)};
 			bind_context.AddGenericBinding(table_index, alias, names, types);
@@ -102,16 +103,23 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 		auto scan_function = TableScanFunction::GetFunction();
 		auto bind_data = make_unique<TableScanBindData>(table);
 		auto alias = ref.alias.empty() ? ref.table_name : ref.alias;
+		// TODO: bundle the type and name vector in a struct (e.g PackedColumnMetadata)
 		vector<LogicalType> table_types;
 		vector<string> table_names;
+		vector<TableColumnType> table_categories;
+
+		vector<LogicalType> return_types;
+		vector<string> return_names;
 		for (auto &col : table->columns) {
-			table_types.push_back(col.type);
-			table_names.push_back(col.name);
+			table_types.push_back(col.Type());
+			table_names.push_back(col.Name());
+			return_types.push_back(col.Type());
+			return_names.push_back(col.Name());
 		}
 		table_names = BindContext::AliasColumnNames(alias, table_names, ref.column_name_alias);
 
-		auto logical_get =
-		    make_unique<LogicalGet>(table_index, scan_function, move(bind_data), table_types, table_names);
+		auto logical_get = make_unique<LogicalGet>(table_index, scan_function, move(bind_data), move(return_types),
+		                                           move(return_names));
 		bind_context.AddBaseTable(table_index, alias, table_names, table_types, *logical_get);
 		return make_unique_base<BoundTableRef, BoundBaseTableRef>(table, move(logical_get));
 	}

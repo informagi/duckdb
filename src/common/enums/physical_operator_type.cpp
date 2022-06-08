@@ -19,6 +19,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "LIMIT";
 	case PhysicalOperatorType::LIMIT_PERCENT:
 		return "LIMIT_PERCENT";
+	case PhysicalOperatorType::STREAMING_LIMIT:
+		return "STREAMING_LIMIT";
 	case PhysicalOperatorType::RESERVOIR_SAMPLE:
 		return "RESERVOIR_SAMPLE";
 	case PhysicalOperatorType::STREAMING_SAMPLE:
@@ -55,6 +57,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "INDEX_JOIN";
 	case PhysicalOperatorType::PIECEWISE_MERGE_JOIN:
 		return "PIECEWISE_MERGE_JOIN";
+	case PhysicalOperatorType::IE_JOIN:
+		return "IE_JOIN";
 	case PhysicalOperatorType::CROSS_PRODUCT:
 		return "CROSS_PRODUCT";
 	case PhysicalOperatorType::UNION:
@@ -115,6 +119,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "INOUT_FUNCTION";
 	case PhysicalOperatorType::CREATE_TYPE:
 		return "CREATE_TYPE";
+	case PhysicalOperatorType::RESULT_COLLECTOR:
+		return "RESULT_COLLECTOR";
 	case PhysicalOperatorType::INVALID:
 		break;
 	}

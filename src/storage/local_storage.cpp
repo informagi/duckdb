@@ -19,16 +19,18 @@ LocalTableStorage::~LocalTableStorage() {
 }
 
 void LocalTableStorage::InitializeScan(LocalScanState &state, TableFilterSet *table_filters) {
+	state.table_filters = table_filters;
+	state.chunk_index = 0;
 	if (collection.ChunkCount() == 0) {
 		// nothing to scan
+		state.max_index = 0;
+		state.last_chunk_count = 0;
 		return;
 	}
-	state.SetStorage(this);
+	state.SetStorage(shared_from_this());
 
-	state.chunk_index = 0;
 	state.max_index = collection.ChunkCount() - 1;
 	state.last_chunk_count = collection.Chunks().back()->size();
-	state.table_filters = table_filters;
 }
 
 idx_t LocalTableStorage::EstimatedSize() {
@@ -47,12 +49,12 @@ LocalScanState::~LocalScanState() {
 	SetStorage(nullptr);
 }
 
-void LocalScanState::SetStorage(LocalTableStorage *new_storage) {
-	if (storage != nullptr) {
+void LocalScanState::SetStorage(shared_ptr<LocalTableStorage> new_storage) {
+	if (storage) {
 		D_ASSERT(storage->active_scans > 0);
 		storage->active_scans--;
 	}
-	storage = new_storage;
+	storage = move(new_storage);
 	if (storage) {
 		storage->active_scans++;
 	}
@@ -66,13 +68,13 @@ void LocalTableStorage::Clear() {
 	table.info->indexes.Scan([&](Index &index) {
 		D_ASSERT(index.type == IndexType::ART);
 		auto &art = (ART &)index;
-		if (art.is_unique) {
+		if (art.constraint_type != IndexConstraintType::NONE) {
 			// unique index: create a local ART index that maintains the same unique constraint
 			vector<unique_ptr<Expression>> unbound_expressions;
 			for (auto &expr : art.unbound_expressions) {
 				unbound_expressions.push_back(expr->Copy());
 			}
-			indexes.push_back(make_unique<ART>(art.column_ids, move(unbound_expressions), true));
+			indexes.push_back(make_unique<ART>(art.column_ids, move(unbound_expressions), art.constraint_type));
 		}
 		return false;
 	});
@@ -166,7 +168,7 @@ void LocalStorage::Append(DataTable *table, DataChunk &chunk) {
 	auto entry = table_storage.find(table);
 	LocalTableStorage *storage;
 	if (entry == table_storage.end()) {
-		auto new_storage = make_unique<LocalTableStorage>(*table);
+		auto new_storage = make_shared<LocalTableStorage>(*table);
 		storage = new_storage.get();
 		table_storage.insert(make_pair(table, move(new_storage)));
 	} else {
@@ -302,14 +304,26 @@ static void UpdateChunk(Vector &data, Vector &updates, Vector &row_ids, idx_t co
 	case PhysicalType::INT8:
 		TemplatedUpdateLoop<int8_t>(data, updates, row_ids, count, base_index);
 		break;
+	case PhysicalType::UINT8:
+		TemplatedUpdateLoop<uint8_t>(data, updates, row_ids, count, base_index);
+		break;
 	case PhysicalType::INT16:
 		TemplatedUpdateLoop<int16_t>(data, updates, row_ids, count, base_index);
+		break;
+	case PhysicalType::UINT16:
+		TemplatedUpdateLoop<uint16_t>(data, updates, row_ids, count, base_index);
 		break;
 	case PhysicalType::INT32:
 		TemplatedUpdateLoop<int32_t>(data, updates, row_ids, count, base_index);
 		break;
+	case PhysicalType::UINT32:
+		TemplatedUpdateLoop<uint32_t>(data, updates, row_ids, count, base_index);
+		break;
 	case PhysicalType::INT64:
 		TemplatedUpdateLoop<int64_t>(data, updates, row_ids, count, base_index);
+		break;
+	case PhysicalType::UINT64:
+		TemplatedUpdateLoop<uint64_t>(data, updates, row_ids, count, base_index);
 		break;
 	case PhysicalType::FLOAT:
 		TemplatedUpdateLoop<float>(data, updates, row_ids, count, base_index);
@@ -344,6 +358,7 @@ void LocalStorage::Update(DataTable *table, Vector &row_ids, const vector<column
 template <class T>
 bool LocalStorage::ScanTableStorage(DataTable &table, LocalTableStorage &storage, T &&fun) {
 	vector<column_t> column_ids;
+	column_ids.reserve(table.column_definitions.size());
 	for (idx_t i = 0; i < table.column_definitions.size(); i++) {
 		column_ids.push_back(i);
 	}
@@ -431,7 +446,7 @@ void LocalStorage::AddColumn(DataTable *old_dt, DataTable *new_dt, ColumnDefinit
 	auto new_storage = move(entry->second);
 
 	// now add the new column filled with the default value to all chunks
-	auto new_column_type = new_column.type;
+	const auto &new_column_type = new_column.Type();
 	ExpressionExecutor executor;
 	DataChunk dummy_chunk;
 	if (default_value) {
@@ -464,6 +479,30 @@ void LocalStorage::ChangeType(DataTable *old_dt, DataTable *new_dt, idx_t change
 		return;
 	}
 	throw NotImplementedException("FIXME: ALTER TYPE with transaction local data not currently supported");
+}
+
+void LocalStorage::FetchChunk(DataTable *table, Vector &row_ids, idx_t count, DataChunk &dst_chunk) {
+	auto storage = GetStorage(table);
+	idx_t chunk_idx = GetChunk(row_ids);
+	auto &chunk = storage->collection.GetChunk(chunk_idx);
+
+	VectorData row_ids_data;
+	row_ids.Orrify(count, row_ids_data);
+	auto row_identifiers = (const row_t *)row_ids_data.data;
+	SelectionVector sel(count);
+	for (idx_t i = 0; i < count; ++i) {
+		const auto idx = row_ids_data.sel->get_index(i);
+		sel.set_index(i, row_identifiers[idx] - MAX_ROW_ID);
+	}
+
+	dst_chunk.InitializeEmpty(chunk.GetTypes());
+	dst_chunk.Slice(chunk, sel, count);
+}
+
+vector<unique_ptr<Index>> &LocalStorage::GetIndexes(DataTable *table) {
+	auto storage = GetStorage(table);
+
+	return storage->indexes;
 }
 
 } // namespace duckdb

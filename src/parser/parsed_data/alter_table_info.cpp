@@ -1,5 +1,6 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/common/field_writer.hpp"
+#include "duckdb/parser/constraint.hpp"
 
 namespace duckdb {
 
@@ -96,6 +97,8 @@ unique_ptr<AlterInfo> AlterTableInfo::Deserialize(FieldReader &reader) {
 		return ChangeColumnTypeInfo::Deserialize(reader, schema, table);
 	case AlterTableType::SET_DEFAULT:
 		return SetDefaultInfo::Deserialize(reader, schema, table);
+	case AlterTableType::FOREIGN_KEY_CONSTRAINT:
+		return AlterForeignKeyInfo::Deserialize(reader, schema, table);
 	default:
 		throw SerializationException("Unknown alter table type for deserialization!");
 	}
@@ -173,26 +176,28 @@ unique_ptr<AlterInfo> AddColumnInfo::Deserialize(FieldReader &reader, string sch
 //===--------------------------------------------------------------------===//
 // RemoveColumnInfo
 //===--------------------------------------------------------------------===//
-RemoveColumnInfo::RemoveColumnInfo(string schema_p, string table_p, string removed_column, bool if_exists)
-    : AlterTableInfo(AlterTableType::REMOVE_COLUMN, move(schema_p), move(table_p)),
-      removed_column(move(removed_column)), if_exists(if_exists) {
+RemoveColumnInfo::RemoveColumnInfo(string schema, string table, string removed_column, bool if_exists, bool cascade)
+    : AlterTableInfo(AlterTableType::REMOVE_COLUMN, move(schema), move(table)), removed_column(move(removed_column)),
+      if_exists(if_exists), cascade(cascade) {
 }
 RemoveColumnInfo::~RemoveColumnInfo() {
 }
 
 unique_ptr<AlterInfo> RemoveColumnInfo::Copy() const {
-	return make_unique_base<AlterInfo, RemoveColumnInfo>(schema, name, removed_column, if_exists);
+	return make_unique_base<AlterInfo, RemoveColumnInfo>(schema, name, removed_column, if_exists, cascade);
 }
 
 void RemoveColumnInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteString(removed_column);
 	writer.WriteField<bool>(if_exists);
+	writer.WriteField<bool>(cascade);
 }
 
 unique_ptr<AlterInfo> RemoveColumnInfo::Deserialize(FieldReader &reader, string schema, string table) {
 	auto new_name = reader.ReadRequired<string>();
 	auto if_exists = reader.ReadRequired<bool>();
-	return make_unique<RemoveColumnInfo>(move(schema), move(table), new_name, if_exists);
+	auto cascade = reader.ReadRequired<bool>();
+	return make_unique<RemoveColumnInfo>(move(schema), move(table), new_name, if_exists, cascade);
 }
 
 //===--------------------------------------------------------------------===//
@@ -250,6 +255,44 @@ unique_ptr<AlterInfo> SetDefaultInfo::Deserialize(FieldReader &reader, string sc
 	auto column_name = reader.ReadRequired<string>();
 	auto new_default = reader.ReadOptional<ParsedExpression>(nullptr);
 	return make_unique<SetDefaultInfo>(move(schema), move(table), move(column_name), move(new_default));
+}
+
+//===--------------------------------------------------------------------===//
+// AlterForeignKeyInfo
+//===--------------------------------------------------------------------===//
+AlterForeignKeyInfo::AlterForeignKeyInfo(string schema_p, string table_p, string fk_table, vector<string> pk_columns,
+                                         vector<string> fk_columns, vector<idx_t> pk_keys, vector<idx_t> fk_keys,
+                                         AlterForeignKeyType type_p)
+    : AlterTableInfo(AlterTableType::FOREIGN_KEY_CONSTRAINT, move(schema_p), move(table_p)), fk_table(move(fk_table)),
+      pk_columns(move(pk_columns)), fk_columns(move(fk_columns)), pk_keys(move(pk_keys)), fk_keys(move(fk_keys)),
+      type(type_p) {
+}
+AlterForeignKeyInfo::~AlterForeignKeyInfo() {
+}
+
+unique_ptr<AlterInfo> AlterForeignKeyInfo::Copy() const {
+	return make_unique_base<AlterInfo, AlterForeignKeyInfo>(schema, name, fk_table, pk_columns, fk_columns, pk_keys,
+	                                                        fk_keys, type);
+}
+
+void AlterForeignKeyInfo::SerializeAlterTable(FieldWriter &writer) const {
+	writer.WriteString(fk_table);
+	writer.WriteList<string>(pk_columns);
+	writer.WriteList<string>(fk_columns);
+	writer.WriteList<idx_t>(pk_keys);
+	writer.WriteList<idx_t>(fk_keys);
+	writer.WriteField<AlterForeignKeyType>(type);
+}
+
+unique_ptr<AlterInfo> AlterForeignKeyInfo::Deserialize(FieldReader &reader, string schema, string table) {
+	auto fk_table = reader.ReadRequired<string>();
+	auto pk_columns = reader.ReadRequiredList<string>();
+	auto fk_columns = reader.ReadRequiredList<string>();
+	auto pk_keys = reader.ReadRequiredList<idx_t>();
+	auto fk_keys = reader.ReadRequiredList<idx_t>();
+	auto type = reader.ReadRequired<AlterForeignKeyType>();
+	return make_unique<AlterForeignKeyInfo>(move(schema), move(table), move(fk_table), move(pk_columns),
+	                                        move(fk_columns), move(pk_keys), move(fk_keys), type);
 }
 
 //===--------------------------------------------------------------------===//

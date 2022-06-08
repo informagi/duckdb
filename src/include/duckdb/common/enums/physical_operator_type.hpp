@@ -19,6 +19,7 @@ enum class PhysicalOperatorType : uint8_t {
 	INVALID,
 	ORDER_BY,
 	LIMIT,
+	STREAMING_LIMIT,
 	LIMIT_PERCENT,
 	TOP_N,
 	WINDOW,
@@ -49,6 +50,7 @@ enum class PhysicalOperatorType : uint8_t {
 	HASH_JOIN,
 	CROSS_PRODUCT,
 	PIECEWISE_MERGE_JOIN,
+	IE_JOIN,
 	DELIM_JOIN,
 	INDEX_JOIN,
 	// -----------------------------
@@ -92,7 +94,8 @@ enum class PhysicalOperatorType : uint8_t {
 	EXPORT,
 	SET,
 	LOAD,
-	INOUT_FUNCTION
+	INOUT_FUNCTION,
+	RESULT_COLLECTOR
 };
 
 string PhysicalOperatorToString(PhysicalOperatorType type);

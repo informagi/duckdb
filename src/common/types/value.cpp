@@ -1,5 +1,3 @@
-#include <utility>
-
 #include "duckdb/common/types/value.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -29,6 +27,9 @@
 #include "duckdb/common/types/cast_helpers.hpp"
 #include "duckdb/common/types/hash.hpp"
 
+#include <utility>
+#include <cmath>
+
 namespace duckdb {
 
 Value::Value(LogicalType type) : type_(move(type)), is_null(true) {
@@ -43,16 +44,10 @@ Value::Value(int64_t val) : type_(LogicalType::BIGINT), is_null(false) {
 }
 
 Value::Value(float val) : type_(LogicalType::FLOAT), is_null(false) {
-	if (!Value::FloatIsValid(val)) {
-		throw OutOfRangeException("Invalid float value %f", val);
-	}
 	value_.float_ = val;
 }
 
 Value::Value(double val) : type_(LogicalType::DOUBLE), is_null(false) {
-	if (!Value::DoubleIsValid(val)) {
-		throw OutOfRangeException("Invalid double value %f", val);
-	}
 	value_.double_ = val;
 }
 
@@ -204,17 +199,17 @@ Value Value::MaximumValue(const LogicalType &type) {
 	case LogicalTypeId::TIME:
 		return Value::TIME(dtime_t(Interval::SECS_PER_DAY * Interval::MICROS_PER_SEC - 1));
 	case LogicalTypeId::TIMESTAMP:
-		return Value::TIMESTAMP(timestamp_t(NumericLimits<int64_t>::Maximum()));
+		return Value::TIMESTAMP(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
 	case LogicalTypeId::TIMESTAMP_MS:
 		return MaximumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_MS);
 	case LogicalTypeId::TIMESTAMP_NS:
-		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Maximum()));
+		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
 	case LogicalTypeId::TIMESTAMP_SEC:
 		return MaximumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_S);
 	case LogicalTypeId::TIME_TZ:
 		return Value::TIMETZ(dtime_t(Interval::SECS_PER_DAY * Interval::MICROS_PER_SEC - 1));
 	case LogicalTypeId::TIMESTAMP_TZ:
-		return Value::TIMESTAMPTZ(timestamp_t(NumericLimits<int64_t>::Maximum()));
+		return MaximumValue(LogicalType::TIMESTAMP);
 	case LogicalTypeId::FLOAT:
 		return Value::FLOAT(NumericLimits<float>::Maximum());
 	case LogicalTypeId::DOUBLE:
@@ -326,12 +321,42 @@ Value Value::UBIGINT(uint64_t value) {
 	return result;
 }
 
-bool Value::FloatIsValid(float value) {
+bool Value::FloatIsFinite(float value) {
 	return !(std::isnan(value) || std::isinf(value));
 }
 
-bool Value::DoubleIsValid(double value) {
+bool Value::DoubleIsFinite(double value) {
 	return !(std::isnan(value) || std::isinf(value));
+}
+
+template <>
+bool Value::IsNan(float input) {
+	return std::isnan(input);
+}
+
+template <>
+bool Value::IsNan(double input) {
+	return std::isnan(input);
+}
+
+template <>
+bool Value::IsFinite(float input) {
+	return Value::FloatIsFinite(input);
+}
+
+template <>
+bool Value::IsFinite(double input) {
+	return Value::DoubleIsFinite(input);
+}
+
+template <>
+bool Value::IsFinite(date_t input) {
+	return Date::IsFinite(input);
+}
+
+template <>
+bool Value::IsFinite(timestamp_t input) {
+	return Timestamp::IsFinite(input);
 }
 
 bool Value::StringIsValid(const char *str, idx_t length) {
@@ -386,9 +411,6 @@ Value Value::DECIMAL(hugeint_t value, uint8_t width, uint8_t scale) {
 }
 
 Value Value::FLOAT(float value) {
-	if (!Value::FloatIsValid(value)) {
-		throw OutOfRangeException("Invalid float value %f", value);
-	}
 	Value result(LogicalType::FLOAT);
 	result.value_.float_ = value;
 	result.is_null = false;
@@ -396,9 +418,6 @@ Value Value::FLOAT(float value) {
 }
 
 Value Value::DOUBLE(double value) {
-	if (!Value::DoubleIsValid(value)) {
-		throw OutOfRangeException("Invalid double value %f", value);
-	}
 	Value result(LogicalType::DOUBLE);
 	result.value_.double_ = value;
 	result.is_null = false;
@@ -875,6 +894,11 @@ DUCKDB_API interval_t Value::GetValue() const {
 	return GetValueInternal<interval_t>();
 }
 
+template <>
+DUCKDB_API Value Value::GetValue() const {
+	return Value(*this);
+}
+
 uintptr_t Value::GetPointer() const {
 	D_ASSERT(type() == LogicalType::POINTER);
 	return value_.pointer;
@@ -1285,8 +1309,14 @@ string Value::ToString() const {
 		return Timestamp::ToString(value_.timestamp);
 	case LogicalTypeId::TIME_TZ:
 		return Time::ToString(value_.time) + Time::ToUTCOffset(0, 0);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Timestamp::ToString(value_.timestamp) + Time::ToUTCOffset(0, 0);
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		// Infinite TSTZ values do not display offsets in PG.
+		auto ret = Timestamp::ToString(value_.timestamp);
+		if (Timestamp::IsFinite(value_.timestamp)) {
+			ret += Time::ToUTCOffset(0, 0);
+		}
+		return ret;
+	}
 	case LogicalTypeId::TIMESTAMP_SEC:
 		return Timestamp::ToString(Timestamp::FromEpochSeconds(value_.timestamp.value));
 	case LogicalTypeId::TIMESTAMP_MS:
@@ -1398,6 +1428,22 @@ string Value::ToSQLString() const {
 		}
 		ret += "}";
 		return ret;
+	}
+	case LogicalTypeId::FLOAT:
+		if (!FloatIsFinite(FloatValue::Get(*this))) {
+			return "'" + ToString() + "'::" + type_.ToString();
+		}
+		return ToString();
+	case LogicalTypeId::DOUBLE: {
+		double val = DoubleValue::Get(*this);
+		if (!DoubleIsFinite(val)) {
+			if (!Value::IsNan(val)) {
+				// to infinity and beyond
+				return val < 0 ? "-1e1000" : "1e1000";
+			}
+			return "'" + ToString() + "'::" + type_.ToString();
+		}
+		return ToString();
 	}
 	case LogicalTypeId::LIST: {
 		string ret = "[";
@@ -1677,6 +1723,7 @@ Value Value::Deserialize(Deserializer &main_source) {
 	auto is_null = reader.ReadRequired<bool>();
 	Value new_value = Value(type);
 	if (is_null) {
+		reader.Finalize();
 		return new_value;
 	}
 	new_value.is_null = false;
@@ -1739,6 +1786,10 @@ void Value::Print() const {
 	Printer::Print(ToString());
 }
 
+bool Value::NotDistinctFrom(const Value &lvalue, const Value &rvalue) {
+	return ValueOperations::NotDistinctFrom(lvalue, rvalue);
+}
+
 bool Value::ValuesAreEqual(const Value &result_value, const Value &value) {
 	if (result_value.IsNull() != value.IsNull()) {
 		return false;
@@ -1774,18 +1825,11 @@ bool Value::ValuesAreEqual(const Value &result_value, const Value &value) {
 		return left == right;
 	}
 	default:
+		if (result_value.type_.id() == LogicalTypeId::FLOAT || result_value.type_.id() == LogicalTypeId::DOUBLE) {
+			return Value::ValuesAreEqual(value, result_value);
+		}
 		return value == result_value;
 	}
-}
-
-template <>
-bool Value::IsValid(float value) {
-	return Value::FloatIsValid(value);
-}
-
-template <>
-bool Value::IsValid(double value) {
-	return Value::DoubleIsValid(value);
 }
 
 } // namespace duckdb

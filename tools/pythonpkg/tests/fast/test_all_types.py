@@ -15,6 +15,25 @@ def get_all_types():
 
 all_types = get_all_types()
 
+# we need to write our own equality function that considers nan==nan for testing purposes
+def recursive_equality(o1, o2):
+	import math
+	if o1 == o2:
+		return True
+	if type(o1) != type(o2):
+		return False
+	if type(o1) == float and math.isnan(o1) and math.isnan(o2):
+		return True
+	try:
+		if len(o1) != len(o2):
+			return False
+		for i in range(len(o1)):
+			if not recursive_equality(o1[i], o2[i]):
+				return False
+		return True
+	except:
+		return False
+
 class TestAllTypes(object):
 	def test_fetchall(self, duckdb_cursor):
 		conn = duckdb.connect()
@@ -25,7 +44,11 @@ class TestAllTypes(object):
 			'timestamp_ns': "'1990-01-01 00:00:00'::TIMESTAMP_NS",
 			'timestamp_ms': "'1990-01-01 00:00:00'::TIMESTAMP_MS",
 			'timestamp_tz': "'1990-01-01 00:00:00'::TIMESTAMPTZ",
-			'date': "'1990-01-01'::DATE"}
+			'date': "'1990-01-01'::DATE",
+			'date_array': "[], ['1970-01-01'::DATE, NULL, '0001-01-01'::DATE, '9999-12-31'::DATE,], [NULL::DATE,]",
+			'timestamp_array': "[], ['1970-01-01'::TIMESTAMP, NULL, '0001-01-01'::TIMESTAMP, '9999-12-31 23:59:59.999999'::TIMESTAMP,], [NULL::TIMESTAMP,]",
+			'timestamptz_array': "[], ['1970-01-01'::TIMESTAMPTZ, NULL, '0001-01-01'::TIMESTAMPTZ, '9999-12-31 23:59:59.999999'::TIMESTAMPTZ,], [NULL::TIMESTAMPTZ,]",
+		}
 
 		correct_answer_map = {'bool':[(False,), (True,), (None,)]
 			, 'tinyint':[(-128,), (127,), (None,)], 'smallint': [(-32768,), (32767,), (None,)]
@@ -40,21 +63,26 @@ class TestAllTypes(object):
 			, 'uuid': [(UUID('00000000-0000-0000-0000-000000000001'),), (UUID('ffffffff-ffff-ffff-ffff-ffffffffffff'),), (None,)]
 			, 'varchar': [('🦆🦆🦆🦆🦆🦆',), ('goose',), (None,)], 'json': [('🦆🦆🦆🦆🦆🦆',), ('goose',), (None,)], 'blob': [(b'thisisalongblob\x00withnullbytes',), (b'\\x00\\x00\\x00a',), (None,)]
 			, 'small_enum':[('DUCK_DUCK_ENUM',), ('GOOSE',), (None,)], 'medium_enum': [('enum_0',), ('enum_299',), (None,)], 'large_enum': [('enum_0',), ('enum_69999',), (None,)]
+			, 'date_array': [([], [datetime.date(1970, 1, 1), None, datetime.date.min, datetime.date.max], [None,],)]
+			, 'timestamp_array': [([], [datetime.datetime(1970, 1, 1), None, datetime.datetime.min, datetime.datetime.max], [None,],),]
+			, 'timestamptz_array': [([], [datetime.datetime(1970, 1, 1), None, datetime.datetime.min, datetime.datetime.max], [None,],),]
 			, 'int_array': [([],), ([42, 999, None, None, -42],), (None,)], 'varchar_array': [([],), (['🦆🦆🦆🦆🦆🦆', 'goose', None, ''],), (None,)]
+			, 'double_array': [([],), ([42.0, float('nan'), float('inf'), float('-inf'), None, -42.0],), (None,)]
 			, 'nested_int_array': [([],), ([[], [42, 999, None, None, -42], None, [], [42, 999, None, None, -42]],), (None,)], 'struct': [({'a': None, 'b': None},), ({'a': 42, 'b': '🦆🦆🦆🦆🦆🦆'},), (None,)]
 			, 'struct_of_arrays': [({'a': None, 'b': None},), ({'a': [42, 999, None, None, -42], 'b': ['🦆🦆🦆🦆🦆🦆', 'goose', None, '']},), (None,)]
 			, 'array_of_structs': [([],), ([{'a': None, 'b': None}, {'a': 42, 'b': '🦆🦆🦆🦆🦆🦆'}, None],), (None,)], 'map':[({'key': [], 'value': []},), ({'key': ['key1', 'key2'], 'value': ['🦆🦆🦆🦆🦆🦆', 'goose']},), (None,)]
 			, 'time_tz':[(datetime.time(0, 0),), (datetime.time(23, 59, 59, 999999),), (None,)], 'interval': [(datetime.timedelta(0),), (datetime.timedelta(days=30969, seconds=999, microseconds=999999),), (None,)]
 			, 'timestamp':[(datetime.datetime(1990, 1, 1, 0, 0),)], 'date':[(datetime.date(1990, 1, 1),)], 'timestamp_s':[(datetime.datetime(1990, 1, 1, 0, 0),)]
-			, 'timestamp_ns':[(datetime.datetime(1990, 1, 1, 0, 0),)], 'timestamp_ms':[(datetime.datetime(1990, 1, 1, 0, 0),)], 'timestamp_tz':[(datetime.datetime(1990, 1, 1, 0, 0),)]}
+			, 'timestamp_ns':[(datetime.datetime(1990, 1, 1, 0, 0),)], 'timestamp_ms':[(datetime.datetime(1990, 1, 1, 0, 0),)], 'timestamp_tz':[(datetime.datetime(1990, 1, 1, 0, 0),)],}
 
 		for cur_type in all_types:
 			if cur_type in replacement_values:
 				result = conn.execute("select "+replacement_values[cur_type]).fetchall()
+				print(cur_type, result)
 			else:
 				result = conn.execute("select "+cur_type+" from test_all_types()").fetchall()
 			correct_result = correct_answer_map[cur_type]
-			assert result == correct_result
+			assert recursive_equality(result, correct_result)
 
 	def test_arrow(self, duckdb_cursor):
 		try:
@@ -64,7 +92,7 @@ class TestAllTypes(object):
 		# We skip those since the extreme ranges are not supported in arrow.
 		replacement_values = {'interval': "INTERVAL '2 years'"}
 		# We do not round trip enum types
-		enum_types = {'small_enum', 'medium_enum', 'large_enum'}
+		enum_types = {'small_enum', 'medium_enum', 'large_enum', 'double_array'}
 		conn = duckdb.connect()
 		for cur_type in all_types:
 			if cur_type in replacement_values:
@@ -75,7 +103,7 @@ class TestAllTypes(object):
 				round_trip_arrow_table = conn.execute("select * from arrow_table").arrow()
 				result_arrow = conn.execute("select * from arrow_table").fetchall()
 				result_roundtrip = conn.execute("select * from round_trip_arrow_table").fetchall()
-				assert result_arrow == result_roundtrip
+				assert recursive_equality(result_arrow, result_roundtrip)
 			else:
 				round_trip_arrow_table = conn.execute("select * from arrow_table").arrow()
 				assert arrow_table.equals(round_trip_arrow_table, check_metadata=True)
@@ -86,11 +114,15 @@ class TestAllTypes(object):
 			'timestamp_s': "'1990-01-01 00:00:00'::TIMESTAMP_S",
 			'timestamp_ns': "'1990-01-01 00:00:00'::TIMESTAMP_NS",
 			'timestamp_ms': "'1990-01-01 00:00:00'::TIMESTAMP_MS",
-			'timestamp_tz': "'1990-01-01 00:00:00'::TIMESTAMPTZ"}
+			'timestamp_tz': "'1990-01-01 00:00:00'::TIMESTAMPTZ",
+			'date': "'1990-01-01'::DATE",
+			'date_array': "[], ['1970-01-01'::DATE, NULL, '0001-01-01'::DATE, '9999-12-31'::DATE,], [NULL::DATE,]",
+			'timestamp_array': "[], ['1970-01-01'::TIMESTAMP, NULL, '0001-01-01'::TIMESTAMP, '9999-12-31 23:59:59.999999'::TIMESTAMP,], [NULL::TIMESTAMP,]",
+			'timestamptz_array': "[], ['1970-01-01'::TIMESTAMPTZ, NULL, '0001-01-01'::TIMESTAMPTZ, '9999-12-31 23:59:59.999999'::TIMESTAMPTZ,], [NULL::TIMESTAMPTZ,]",
+			}
 
 		conn = duckdb.connect()
 		for cur_type in all_types:
-			print(cur_type)
 			if cur_type in replacement_values:
 				dataframe = conn.execute("select "+replacement_values[cur_type]).df()
 			else:
@@ -98,4 +130,4 @@ class TestAllTypes(object):
 			round_trip_dataframe = conn.execute("select * from dataframe").df()
 			result_dataframe = conn.execute("select * from dataframe").fetchall()
 			result_roundtrip = conn.execute("select * from round_trip_dataframe").fetchall()
-			assert result_dataframe == result_roundtrip
+			assert recursive_equality(result_dataframe, result_roundtrip)

@@ -6,11 +6,14 @@
 #include "duckdb/planner/bound_tableref.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/logical_sample.hpp"
-#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+#include "duckdb/planner/expression_binder/returning_binder.hpp"
 
 #include <algorithm>
+
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 
 namespace duckdb {
 
@@ -19,9 +22,9 @@ shared_ptr<Binder> Binder::CreateBinder(ClientContext &context, Binder *parent, 
 }
 
 Binder::Binder(bool, ClientContext &context, shared_ptr<Binder> parent_p, bool inherit_ctes_p)
-    : context(context), read_only(true), requires_valid_transaction(true), allow_stream_result(false),
-      parent(move(parent_p)), bound_tables(0), inherit_ctes(inherit_ctes_p) {
+    : context(context), parent(move(parent_p)), bound_tables(0), inherit_ctes(inherit_ctes_p) {
 	parameters = nullptr;
+	parameter_types = nullptr;
 	if (parent) {
 		// We have to inherit macro parameter bindings from the parent binder, if there is a parent.
 		macro_binding = parent->macro_binding;
@@ -30,6 +33,7 @@ Binder::Binder(bool, ClientContext &context, shared_ptr<Binder> parent_p, bool i
 			bind_context.SetCTEBindings(parent->bind_context.GetCTEBindings());
 			bind_context.cte_references = parent->bind_context.cte_references;
 			parameters = parent->parameters;
+			parameter_types = parent->parameter_types;
 		}
 	}
 }
@@ -327,11 +331,12 @@ bool Binder::HasMatchingBinding(const string &schema_name, const string &table_n
 			return false;
 		}
 	}
-	if (!binding->HasMatchingBinding(column_name)) {
+	bool binding_found;
+	binding_found = binding->HasMatchingBinding(column_name);
+	if (!binding_found) {
 		error_message = binding->ColumnNotFoundError(column_name);
-		return false;
 	}
-	return true;
+	return binding_found;
 }
 
 void Binder::SetBindingMode(BindingMode mode) {
@@ -374,6 +379,54 @@ string Binder::FormatError(TableRef &ref_context, const string &message) {
 string Binder::FormatErrorRecursive(idx_t query_location, const string &message, vector<ExceptionFormatValue> &values) {
 	QueryErrorContext context(root_statement, query_location);
 	return context.FormatErrorRecursive(message, values);
+}
+
+BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> returning_list, TableCatalogEntry *table,
+                                     idx_t update_table_index, unique_ptr<LogicalOperator> child_operator,
+                                     BoundStatement result) {
+
+	vector<LogicalType> types;
+	vector<std::string> names;
+
+	auto binder = Binder::CreateBinder(context);
+
+	for (auto &col : table->columns) {
+		names.push_back(col.Name());
+		types.push_back(col.Type());
+	}
+
+	binder->bind_context.AddGenericBinding(update_table_index, table->name, names, types);
+	ReturningBinder returning_binder(*binder, context);
+
+	vector<unique_ptr<Expression>> projection_expressions;
+	LogicalType result_type;
+	for (auto &returning_expr : returning_list) {
+		auto expr_type = returning_expr->GetExpressionType();
+		if (expr_type == ExpressionType::STAR) {
+			auto generated_star_list = vector<unique_ptr<ParsedExpression>>();
+			binder->bind_context.GenerateAllColumnExpressions((StarExpression &)*returning_expr, generated_star_list);
+
+			for (auto &star_column : generated_star_list) {
+				auto star_expr = returning_binder.Bind(star_column, &result_type);
+				result.types.push_back(result_type);
+				result.names.push_back(star_expr->GetName());
+				projection_expressions.push_back(move(star_expr));
+			}
+		} else {
+			auto expr = returning_binder.Bind(returning_expr, &result_type);
+			result.names.push_back(expr->GetName());
+			result.types.push_back(result_type);
+			projection_expressions.push_back(move(expr));
+		}
+	}
+
+	auto projection = make_unique<LogicalProjection>(GenerateTableIndex(), move(projection_expressions));
+	projection->AddChild(move(child_operator));
+	D_ASSERT(result.types.size() == result.names.size());
+	result.plan = move(projection);
+	properties.allow_stream_result = true;
+	properties.return_type = StatementReturnType::QUERY_RESULT;
+	return result;
 }
 
 } // namespace duckdb

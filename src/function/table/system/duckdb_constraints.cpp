@@ -5,17 +5,19 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/parser/constraint.hpp"
 #include "duckdb/parser/constraints/check_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/planner/constraints/bound_unique_constraint.hpp"
 #include "duckdb/planner/constraints/bound_check_constraint.hpp"
 #include "duckdb/planner/constraints/bound_not_null_constraint.hpp"
+#include "duckdb/planner/constraints/bound_foreign_key_constraint.hpp"
 #include "duckdb/storage/data_table.hpp"
 
 namespace duckdb {
 
-struct DuckDBConstraintsData : public FunctionOperatorData {
+struct DuckDBConstraintsData : public GlobalTableFunctionState {
 	DuckDBConstraintsData() : offset(0), constraint_offset(0) {
 	}
 
@@ -24,10 +26,7 @@ struct DuckDBConstraintsData : public FunctionOperatorData {
 	idx_t constraint_offset;
 };
 
-static unique_ptr<FunctionData> DuckDBConstraintsBind(ClientContext &context, vector<Value> &inputs,
-                                                      named_parameter_map_t &named_parameters,
-                                                      vector<LogicalType> &input_table_types,
-                                                      vector<string> &input_table_names,
+static unique_ptr<FunctionData> DuckDBConstraintsBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	names.emplace_back("schema_name");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -64,9 +63,7 @@ static unique_ptr<FunctionData> DuckDBConstraintsBind(ClientContext &context, ve
 	return nullptr;
 }
 
-unique_ptr<FunctionOperatorData> DuckDBConstraintsInit(ClientContext &context, const FunctionData *bind_data,
-                                                       const vector<column_t> &column_ids,
-                                                       TableFilterCollection *filters) {
+unique_ptr<GlobalTableFunctionState> DuckDBConstraintsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto result = make_unique<DuckDBConstraintsData>();
 
 	// scan all the schemas for tables and collect themand collect them
@@ -76,14 +73,13 @@ unique_ptr<FunctionOperatorData> DuckDBConstraintsInit(ClientContext &context, c
 	};
 
 	// check the temp schema as well
-	context.temporary_objects->Scan(context, CatalogType::TABLE_ENTRY,
-	                                [&](CatalogEntry *entry) { result->entries.push_back(entry); });
+	ClientData::Get(context).temporary_objects->Scan(context, CatalogType::TABLE_ENTRY,
+	                                                 [&](CatalogEntry *entry) { result->entries.push_back(entry); });
 	return move(result);
 }
 
-void DuckDBConstraintsFunction(ClientContext &context, const FunctionData *bind_data,
-                               FunctionOperatorData *operator_state, DataChunk *input, DataChunk &output) {
-	auto &data = (DuckDBConstraintsData &)*operator_state;
+void DuckDBConstraintsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = (DuckDBConstraintsData &)*data_p.global_state;
 	if (data.offset >= data.entries.size()) {
 		// finished returning values
 		return;
@@ -171,7 +167,13 @@ void DuckDBConstraintsFunction(ClientContext &context, const FunctionData *bind_
 				column_index_list.push_back(bound_not_null.index);
 				break;
 			}
-			case ConstraintType::FOREIGN_KEY:
+			case ConstraintType::FOREIGN_KEY: {
+				auto &bound_foreign_key = (BoundForeignKeyConstraint &)bound_constraint;
+				for (auto &col_idx : bound_foreign_key.info.fk_keys) {
+					column_index_list.push_back(column_t(col_idx));
+				}
+				break;
+			}
 			default:
 				throw NotImplementedException("Unimplemented constraint for duckdb_constraints");
 			}
@@ -180,7 +182,7 @@ void DuckDBConstraintsFunction(ClientContext &context, const FunctionData *bind_
 			vector<Value> column_name_list;
 			for (auto column_index : column_index_list) {
 				index_list.push_back(Value::BIGINT(column_index));
-				column_name_list.emplace_back(table.columns[column_index].name);
+				column_name_list.emplace_back(table.columns[column_index].Name());
 			}
 
 			// constraint_column_indexes, LIST

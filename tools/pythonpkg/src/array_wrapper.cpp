@@ -348,16 +348,15 @@ static bool ConvertNested(idx_t target_offset, data_ptr_t target_data, bool *tar
 			if (!idata.validity.RowIsValidUnsafe(src_idx)) {
 				target_mask[offset] = true;
 			} else {
-				out_ptr[offset] = CONVERT::ConvertValue(input, src_idx);
+				out_ptr[offset] = CONVERT::ConvertValue(input, i);
 				target_mask[offset] = false;
 			}
 		}
 		return true;
 	} else {
 		for (idx_t i = 0; i < count; i++) {
-			idx_t src_idx = idata.sel->get_index(i);
 			idx_t offset = target_offset + i;
-			out_ptr[offset] = CONVERT::ConvertValue(input, src_idx);
+			out_ptr[offset] = CONVERT::ConvertValue(input, i);
 			target_mask[offset] = false;
 		}
 		return false;
@@ -762,24 +761,13 @@ void NumpyResultConversion::Resize(idx_t new_capacity) {
 	capacity = new_capacity;
 }
 
-void NumpyResultConversion::Append(DataChunk &chunk, unordered_map<idx_t, py::list> *categories) {
+void NumpyResultConversion::Append(DataChunk &chunk) {
 	if (count + chunk.size() > capacity) {
 		Resize(capacity * 2);
 	}
 	auto chunk_types = chunk.GetTypes();
 	for (idx_t col_idx = 0; col_idx < owned_data.size(); col_idx++) {
 		owned_data[col_idx].Append(count, chunk.data[col_idx], chunk.size());
-		if (chunk_types[col_idx].id() == LogicalTypeId::ENUM) {
-			D_ASSERT(categories);
-			// It's an ENUM type, in addition to converting the codes we must convert the categories
-			if (categories->find(col_idx) == categories->end()) {
-				auto &categories_list = EnumType::GetValuesInsertOrder(chunk.data[col_idx].GetType());
-				auto categories_size = EnumType::GetSize(chunk.data[col_idx].GetType());
-				for (idx_t i = 0; i < categories_size; i++) {
-					(*categories)[col_idx].append(py::cast(categories_list.GetValue(i).ToString()));
-				}
-			}
-		}
 	}
 	count += chunk.size();
 #ifdef DEBUG

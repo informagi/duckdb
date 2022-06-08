@@ -11,6 +11,7 @@
 #include "duckdb/parser/parsed_data/parse_info.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/enums/catalog_type.hpp"
+#include "duckdb/parser/constraint.hpp"
 
 namespace duckdb {
 
@@ -21,6 +22,8 @@ enum class AlterType : uint8_t {
 	ALTER_SEQUENCE = 3,
 	CHANGE_OWNERSHIP = 4
 };
+
+enum AlterForeignKeyType : uint8_t { AFT_ADD = 0, AFT_DELETE = 1 };
 
 struct AlterInfo : public ParseInfo {
 	AlterInfo(AlterType type, string schema, string name);
@@ -71,7 +74,8 @@ enum class AlterTableType : uint8_t {
 	ADD_COLUMN = 3,
 	REMOVE_COLUMN = 4,
 	ALTER_COLUMN_TYPE = 5,
-	SET_DEFAULT = 6
+	SET_DEFAULT = 6,
+	FOREIGN_KEY_CONSTRAINT = 7,
 };
 
 struct AlterTableInfo : public AlterInfo {
@@ -141,13 +145,15 @@ public:
 // RemoveColumnInfo
 //===--------------------------------------------------------------------===//
 struct RemoveColumnInfo : public AlterTableInfo {
-	RemoveColumnInfo(string schema, string table, string removed_column, bool if_exists);
+	RemoveColumnInfo(string schema, string table, string removed_column, bool if_exists, bool cascade);
 	~RemoveColumnInfo() override;
 
 	//! The column to remove
 	string removed_column;
 	//! Whether or not an error should be thrown if the column does not exist
 	bool if_exists;
+	//! Whether or not the column should be removed if a dependency conflict arises (used by GENERATED columns)
+	bool cascade;
 
 public:
 	unique_ptr<AlterInfo> Copy() const override;
@@ -187,6 +193,28 @@ struct SetDefaultInfo : public AlterTableInfo {
 	string column_name;
 	//! The expression used for data conversion
 	unique_ptr<ParsedExpression> expression;
+
+public:
+	unique_ptr<AlterInfo> Copy() const override;
+	void SerializeAlterTable(FieldWriter &writer) const override;
+	static unique_ptr<AlterInfo> Deserialize(FieldReader &reader, string schema, string table);
+};
+
+//===--------------------------------------------------------------------===//
+// AlterForeignKeyInfo
+//===--------------------------------------------------------------------===//
+struct AlterForeignKeyInfo : public AlterTableInfo {
+	AlterForeignKeyInfo(string schema, string table, string fk_table, vector<string> pk_columns,
+	                    vector<string> fk_columns, vector<idx_t> pk_keys, vector<idx_t> fk_keys,
+	                    AlterForeignKeyType type);
+	~AlterForeignKeyInfo() override;
+
+	string fk_table;
+	vector<string> pk_columns;
+	vector<string> fk_columns;
+	vector<idx_t> pk_keys;
+	vector<idx_t> fk_keys;
+	AlterForeignKeyType type;
 
 public:
 	unique_ptr<AlterInfo> Copy() const override;

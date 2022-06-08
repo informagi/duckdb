@@ -1,8 +1,14 @@
 name: OSX
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches-ignore:
+      - '**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/master' || github.sha }}
   cancel-in-progress: true
 
 defaults:
@@ -25,7 +31,7 @@ jobs:
       TREAT_WARNINGS_AS_ERRORS: 1
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         fetch-depth: 0
 
@@ -63,13 +69,18 @@ jobs:
       OSX_BUILD_UNIVERSAL: 1
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         fetch-depth: 0
 
     - uses: actions/setup-python@v2
       with:
         python-version: '3.7'
+
+    - name: Setup Ccache
+      uses: hendrikmuhs/ccache-action@main
+      with:
+        key: ${{ github.job }}
 
     - name: Build
       run: make
@@ -108,24 +119,12 @@ jobs:
     runs-on: macos-latest
     needs: xcode-debug
     env:
-      BUILD_VISUALIZER: 1
-      BUILD_ICU: 1
-      BUILD_TPCH: 1
-      BUILD_TPCDS: 1
-      BUILD_FTS: 1
-      BUILD_HTTPFS: 1
-      BUILD_JSON: 1
-      BUILD_EXCEL: 1
-      BUILD_SUBSTRAIT_EXTENSION: 1
-      STATIC_OPENSSL: 1
-      DISABLE_BUILTIN_EXTENSIONS: 1
-      OSX_BUILD_UNIVERSAL: 1
       AWS_ACCESS_KEY_ID: ${{secrets.S3_ID}}
       AWS_SECRET_ACCESS_KEY: ${{secrets.S3_KEY}}
       AWS_DEFAULT_REGION: us-east-1
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -146,11 +145,16 @@ jobs:
           make -j
           make install_sw
 
-      - name: Build
+      - name: Get OpenSSL path
         run: |
           export OPENSSL_ROOT_DIR=`pwd`/build/openssl/build
-          echo $OPENSSL_ROOT_DIR
-          make
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
+
+      - uses: ./.github/actions/build_extensions
+        with:
+          openssl_path: ${{ env.OPENSSL_ROOT_DIR }}
+          treat_warn_as_error: 0
+          post_install: rm build/release/src/libduckdb*
 
       - name: Deploy
         run: |

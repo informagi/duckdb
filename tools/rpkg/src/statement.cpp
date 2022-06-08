@@ -2,10 +2,13 @@
 #include "typesr.hpp"
 #include "altrepstring.hpp"
 
+#include <R_ext/Utils.h>
+
 #include "duckdb/common/arrow.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/arrow_wrapper.hpp"
 #include "duckdb/common/result_arrow_wrapper.hpp"
+#include "duckdb/main/stream_query_result.hpp"
 
 using namespace duckdb;
 using namespace cpp11::literals;
@@ -110,6 +113,9 @@ static void VectorToR(Vector &src_vec, size_t count, void *dest, uint64_t dest_o
 			break;
 		case LogicalTypeId::ENUM:
 			rtype = "factor";
+			break;
+		case LogicalTypeId::UNKNOWN:
+			rtype = "unknown";
 			break;
 		default:
 			cpp11::stop("rapi_prepare: Unknown column type for prepare: %s", stype.ToString().c_str());
@@ -553,18 +559,14 @@ struct AppendableRList {
 };
 
 bool FetchArrowChunk(QueryResult *result, AppendableRList &batches_list, ArrowArray &arrow_data,
-                     ArrowSchema &arrow_schema, SEXP batch_import_from_c, SEXP arrow_namespace) {
-	if (result->type == QueryResultType::STREAM_RESULT) {
-		auto stream_result = (StreamQueryResult *)result;
-		if (!stream_result->IsOpen()) {
-			return false;
-		}
-	}
-	unique_ptr<DataChunk> data_chunk = result->Fetch();
+                     ArrowSchema &arrow_schema, SEXP batch_import_from_c, SEXP arrow_namespace, idx_t chunk_size) {
+
+	auto data_chunk = ArrowUtil::FetchChunk(result, chunk_size);
 	if (!data_chunk || data_chunk->size() == 0) {
 		return false;
 	}
-	result->ToArrowSchema(&arrow_schema);
+	string timezone_config = QueryResult::GetConfigTimezone(*result);
+	QueryResult::ToArrowSchema(&arrow_schema, result->types, result->names, timezone_config);
 	data_chunk->ToArrowArray(&arrow_data);
 	batches_list.PrepAppend();
 	batches_list.Append(cpp11::safe[Rf_eval](batch_import_from_c, arrow_namespace));
@@ -572,8 +574,10 @@ bool FetchArrowChunk(QueryResult *result, AppendableRList &batches_list, ArrowAr
 }
 
 // Turn a DuckDB result set into an Arrow Table
-[[cpp11::register]] SEXP rapi_execute_arrow(duckdb::rqry_eptr_t qry_res, bool stream, int vec_per_chunk,
-                                            bool return_table) {
+[[cpp11::register]] SEXP rapi_execute_arrow(duckdb::rqry_eptr_t qry_res, int chunk_size) {
+	if (qry_res->result->type == QueryResultType::STREAM_RESULT) {
+		qry_res->result = ((StreamQueryResult *)qry_res->result.get())->Materialize();
+	}
 	auto result = qry_res->result.get();
 	// somewhat dark magic below
 	cpp11::function getNamespace = RStrings::get().getNamespace_sym;
@@ -590,40 +594,29 @@ bool FetchArrowChunk(QueryResult *result, AppendableRList &batches_list, ArrowAr
 	cpp11::sexp batch_import_from_c(Rf_lang3(RStrings::get().ImportRecordBatch_sym, data_ptr_sexp, schema_ptr_sexp));
 	// create data batches
 	AppendableRList batches_list;
-	if (stream) {
-		for (idx_t i = 0; i < (size_t)vec_per_chunk; i++) {
-			if (!FetchArrowChunk(result, batches_list, arrow_data, arrow_schema, batch_import_from_c,
-			                     arrow_namespace)) {
-				break;
-			}
-		}
-	} else {
-		while (FetchArrowChunk(result, batches_list, arrow_data, arrow_schema, batch_import_from_c, arrow_namespace)) {
-		}
+
+	while (FetchArrowChunk(result, batches_list, arrow_data, arrow_schema, batch_import_from_c, arrow_namespace,
+	                       chunk_size)) {
 	}
 
 	SET_LENGTH(batches_list.the_list, batches_list.size);
-
-	result->ToArrowSchema(&arrow_schema);
+	string timezone_config = QueryResult::GetConfigTimezone(*result);
+	QueryResult::ToArrowSchema(&arrow_schema, result->types, result->names, timezone_config);
 	cpp11::sexp schema_arrow_obj(cpp11::safe[Rf_eval](schema_import_from_c, arrow_namespace));
 
 	// create arrow::Table
-	if (return_table) {
-		cpp11::sexp from_record_batches(
-		    Rf_lang3(RStrings::get().Table__from_record_batches_sym, batches_list.the_list, schema_arrow_obj));
-		return cpp11::safe[Rf_eval](from_record_batches, arrow_namespace);
-	}
-	return batches_list.the_list;
+	cpp11::sexp from_record_batches(
+	    Rf_lang3(RStrings::get().Table__from_record_batches_sym, batches_list.the_list, schema_arrow_obj));
+	return cpp11::safe[Rf_eval](from_record_batches, arrow_namespace);
 }
 
 // Turn a DuckDB result set into an RecordBatchReader
-[[cpp11::register]] SEXP rapi_record_batch(duckdb::rqry_eptr_t qry_res, int approx_batch_size) {
+[[cpp11::register]] SEXP rapi_record_batch(duckdb::rqry_eptr_t qry_res, int chunk_size) {
 	// somewhat dark magic below
 	cpp11::function getNamespace = RStrings::get().getNamespace_sym;
 	cpp11::sexp arrow_namespace(getNamespace(RStrings::get().arrow_str));
 
-	ResultArrowArrayStreamWrapper *result_stream =
-	    new ResultArrowArrayStreamWrapper(move(qry_res->result), approx_batch_size);
+	ResultArrowArrayStreamWrapper *result_stream = new ResultArrowArrayStreamWrapper(move(qry_res->result), chunk_size);
 	cpp11::sexp stream_ptr_sexp(
 	    Rf_ScalarReal(static_cast<double>(reinterpret_cast<uintptr_t>(&result_stream->stream))));
 	cpp11::sexp record_batch_reader(Rf_lang2(RStrings::get().ImportRecordBatchReader_sym, stream_ptr_sexp));
@@ -635,7 +628,16 @@ bool FetchArrowChunk(QueryResult *result, AppendableRList &batches_list, ArrowAr
 		cpp11::stop("rapi_execute: Invalid statement");
 	}
 
-	auto generic_result = stmt->stmt->Execute(stmt->parameters, arrow);
+	auto pending_query = stmt->stmt->PendingQuery(stmt->parameters, arrow);
+	duckdb::PendingExecutionResult execution_result;
+	do {
+		execution_result = pending_query->ExecuteTask();
+		R_CheckUserInterrupt();
+	} while (execution_result == PendingExecutionResult::RESULT_NOT_READY);
+	if (execution_result == PendingExecutionResult::EXECUTION_ERROR) {
+		cpp11::stop("rapi_execute: Failed to run query\nError: %s", pending_query->error.c_str());
+	}
+	auto generic_result = pending_query->Execute();
 	if (!generic_result->success) {
 		cpp11::stop("rapi_execute: Failed to run query\nError: %s", generic_result->error.c_str());
 	}

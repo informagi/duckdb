@@ -89,3 +89,29 @@ SELECT g, LIST(i ORDER BY i DESC NULLS LAST) FROM list_extract_test GROUP BY g;
 1	[2, 1]
 2	[3]
 3	[42, NULL]
+
+query II
+SELECT g, LIST(i ORDER BY i ASC) FILTER (WHERE i <> 3) FROM list_extract_test GROUP BY g;
+----
+1	[1, 2]
+2	NULL
+3	[42]
+
+query II
+SELECT g, LIST(i ORDER BY i ASC) FILTER (WHERE i IS NULL) FROM list_extract_test GROUP BY g;
+----
+1	NULL
+2	NULL
+3	[NULL]
+
+query II
+SELECT g, LIST(i ORDER BY i ASC) FILTER (WHERE i = 1337) FROM list_extract_test GROUP BY g;
+----
+1	NULL
+2	NULL
+3	NULL
+
+# test forcing reallocation of lists
+
+statement ok
+CREATE TABLE test_realloc AS (SELECT range % 4 g, list(range || 'some_string_longer_than_12') l FROM range(500000) GROUP BY range % 4);

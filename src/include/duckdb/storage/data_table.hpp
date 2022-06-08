@@ -18,6 +18,7 @@
 #include "duckdb/storage/table/persistent_table_data.hpp"
 #include "duckdb/storage/table/row_group.hpp"
 #include "duckdb/common/enums/scan_options.hpp"
+#include "duckdb/storage/statistics/column_statistics.hpp"
 
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -75,6 +76,8 @@ public:
 		lock_guard<mutex> lock(indexes_lock);
 		return indexes.size();
 	}
+
+	Index *FindForeignKeyIndex(const vector<idx_t> &fk_keys, ForeignKeyType fk_type);
 
 private:
 	//! Indexes associated with the current table
@@ -225,9 +228,11 @@ public:
 
 private:
 	//! Verify constraints with a chunk from the Append containing all columns of the table
-	void VerifyAppendConstraints(TableCatalogEntry &table, DataChunk &chunk);
+	void VerifyAppendConstraints(TableCatalogEntry &table, ClientContext &context, DataChunk &chunk);
 	//! Verify constraints with a chunk from the Update containing only the specified column_ids
 	void VerifyUpdateConstraints(TableCatalogEntry &table, DataChunk &chunk, const vector<column_t> &column_ids);
+	//! Verify constraints with a chunk from the Delete containing all columns of the table
+	void VerifyDeleteConstraints(TableCatalogEntry &table, ClientContext &context, DataChunk &chunk);
 
 	void InitializeScanWithOffset(TableScanState &state, const vector<column_t> &column_ids, idx_t start_row,
 	                              idx_t end_row);
@@ -248,7 +253,7 @@ private:
 	//! The segment trees holding the various row_groups of the table
 	shared_ptr<SegmentTree> row_groups;
 	//! Column statistics
-	vector<unique_ptr<BaseStatistics>> column_stats;
+	vector<shared_ptr<ColumnStatistics>> column_stats;
 	//! The statistics lock
 	mutex stats_lock;
 	//! Whether or not the data table is the root DataTable for this table; the root DataTable is the newest version

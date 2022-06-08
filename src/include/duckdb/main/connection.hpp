@@ -39,6 +39,7 @@ class Connection {
 public:
 	DUCKDB_API explicit Connection(DuckDB &database);
 	DUCKDB_API explicit Connection(DatabaseInstance &database);
+	DUCKDB_API ~Connection();
 
 	shared_ptr<ClientContext> context;
 	warning_callback warning_cb;
@@ -83,9 +84,10 @@ public:
 
 	//! Issues a query to the database and returns a Pending Query Result. Note that "query" may only contain
 	//! a single statement.
-	DUCKDB_API unique_ptr<PendingQueryResult> PendingQuery(const string &query);
+	DUCKDB_API unique_ptr<PendingQueryResult> PendingQuery(const string &query, bool allow_stream_result = false);
 	//! Issues a query to the database and returns a Pending Query Result
-	DUCKDB_API unique_ptr<PendingQueryResult> PendingQuery(unique_ptr<SQLStatement> statement);
+	DUCKDB_API unique_ptr<PendingQueryResult> PendingQuery(unique_ptr<SQLStatement> statement,
+	                                                       bool allow_stream_result = false);
 
 	//! Prepare the specified query, returning a prepared statement object
 	DUCKDB_API unique_ptr<PreparedStatement> Prepare(const string &query);

@@ -44,7 +44,7 @@ public class DuckDBResultSet implements ResultSet {
 	private boolean finished = false;
 	private boolean was_null;
 
-	public DuckDBResultSet(DuckDBPreparedStatement stmt, DuckDBResultSetMetaData meta, ByteBuffer result_ref) {
+	public DuckDBResultSet(DuckDBPreparedStatement stmt, DuckDBResultSetMetaData meta, ByteBuffer result_ref) throws SQLException {
 		this.stmt = stmt;
 		this.result_ref = result_ref;
 		this.meta = meta;
@@ -149,6 +149,8 @@ public class DuckDBResultSet implements ResultSet {
 			return getBigDecimal(columnIndex);
 		case VARCHAR:
 			return getString(columnIndex);
+		case ENUM:
+			return getString(columnIndex);
 		case TIME:
 			return getTime(columnIndex);
 		case DATE:
@@ -194,7 +196,8 @@ public class DuckDBResultSet implements ResultSet {
 			return null;
 		}
 
-		if (isType(columnIndex, DuckDBColumnType.VARCHAR)) {
+		if (isType(columnIndex, DuckDBColumnType.VARCHAR)
+			|| isType(columnIndex, DuckDBColumnType.ENUM)) {
 			return (String) current_chunk[columnIndex - 1].varlen_data[chunk_idx - 1];
 		}
 		Object res = getObject(columnIndex);
@@ -1262,7 +1265,8 @@ public class DuckDBResultSet implements ResultSet {
 				throw new SQLException("Can't convert value to BigDecimal " + type.toString());
 			}
 		} else if (type == String.class) {
-			if (sqlType == DuckDBColumnType.VARCHAR) {
+			if (sqlType == DuckDBColumnType.VARCHAR
+					|| sqlType == DuckDBColumnType.ENUM) {
 				return type.cast(getString(columnIndex));
 			} else {
 				throw new SQLException("Can't convert value to String " + type.toString());

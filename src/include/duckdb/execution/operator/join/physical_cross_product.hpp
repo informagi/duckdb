@@ -22,7 +22,7 @@ public:
 	// Operator Interface
 	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
-	                           OperatorState &state) const override;
+	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
 	bool ParallelOperator() const override {
 		return true;
@@ -44,6 +44,10 @@ public:
 	bool ParallelSink() const override {
 		return true;
 	}
+
+public:
+	void BuildPipelines(Executor &executor, Pipeline &current, PipelineBuildState &state) override;
+	vector<const PhysicalOperator *> GetSources() const override;
 };
 
 } // namespace duckdb
