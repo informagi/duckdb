@@ -33,13 +33,6 @@
 #define TPCDS_STATICALLY_LOADED false
 #endif
 
-#if defined(BUILD_SUBSTRAIT_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
-#define SUBSTRAIT_STATICALLY_LOADED true
-#include "substrait-extension.hpp"
-#else
-#define SUBSTRAIT_STATICALLY_LOADED false
-#endif
-
 #if defined(BUILD_FTS_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
 #define FTS_STATICALLY_LOADED true
 #include "fts-extension.hpp"
@@ -73,6 +66,10 @@
 #include "sqlsmith-extension.hpp"
 #endif
 
+#if defined(BUILD_INET_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#include "inet-extension.hpp"
+#endif
+
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -83,12 +80,12 @@ static DefaultExtension internal_extensions[] = {
     {"parquet", "Adds support for reading and writing parquet files", PARQUET_STATICALLY_LOADED},
     {"tpch", "Adds TPC-H data generation and query support", TPCH_STATICALLY_LOADED},
     {"tpcds", "Adds TPC-DS data generation and query support", TPCDS_STATICALLY_LOADED},
-    {"substrait", "Adds support for the Substrait integration", SUBSTRAIT_STATICALLY_LOADED},
     {"fts", "Adds support for Full-Text Search Indexes", FTS_STATICALLY_LOADED},
     {"httpfs", "Adds support for reading and writing files over a HTTP(S) connection", HTTPFS_STATICALLY_LOADED},
     {"json", "Adds support for JSON operations", JSON_STATICALLY_LOADED},
     {"sqlite_scanner", "Adds support for reading SQLite database files", false},
     {"postgres_scanner", "Adds support for reading from a Postgres database", false},
+    {"inet", "Adds support for IP-related data types and functions", false},
     {nullptr, nullptr, false}};
 
 idx_t ExtensionHelper::DefaultExtensionCount() {
@@ -107,8 +104,8 @@ DefaultExtension ExtensionHelper::GetDefaultExtension(idx_t index) {
 // Load Statically Compiled Extension
 //===--------------------------------------------------------------------===//
 void ExtensionHelper::LoadAllExtensions(DuckDB &db) {
-	unordered_set<string> extensions {"parquet",   "icu",        "tpch", "tpcds", "fts",     "httpfs",
-	                                  "substrait", "visualizer", "json", "excel", "sqlsmith"};
+	unordered_set<string> extensions {"parquet",    "icu",  "tpch",  "tpcds",    "fts", "httpfs",
+	                                  "visualizer", "json", "excel", "sqlsmith", "inet"};
 	for (auto &ext : extensions) {
 		LoadExtensionInternal(db, ext, true);
 	}
@@ -124,12 +121,12 @@ ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std
 	if (!initial_load && StringUtil::Contains(DUCKDB_TEST_REMOTE_INSTALL, extension)) {
 		Connection con(db);
 		auto result = con.Query("INSTALL " + extension);
-		if (!result->success) {
+		if (result->HasError()) {
 			result->Print();
 			return ExtensionLoadResult::EXTENSION_UNKNOWN;
 		}
 		result = con.Query("LOAD " + extension);
-		if (!result->success) {
+		if (result->HasError()) {
 			result->Print();
 			return ExtensionLoadResult::EXTENSION_UNKNOWN;
 		}
@@ -155,14 +152,6 @@ ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std
 		db.LoadExtension<TPCHExtension>();
 #else
 		// icu extension required but not build: skip this test
-		return ExtensionLoadResult::NOT_LOADED;
-#endif
-	} else if (extension == "substrait") {
-#if SUBSTRAIT_STATICALLY_LOADED
-
-		db.LoadExtension<SubstraitExtension>();
-#else
-		// substrait extension required but not build: skip this test
 		return ExtensionLoadResult::NOT_LOADED;
 #endif
 	} else if (extension == "tpcds") {
@@ -209,6 +198,13 @@ ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std
 	} else if (extension == "sqlsmith") {
 #if defined(BUILD_SQLSMITH_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
 		db.LoadExtension<SQLSmithExtension>();
+#else
+		// excel extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "inet") {
+#if defined(BUILD_INET_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<INETExtension>();
 #else
 		// excel extension required but not build: skip this test
 		return ExtensionLoadResult::NOT_LOADED;

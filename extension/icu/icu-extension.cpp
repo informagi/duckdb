@@ -122,7 +122,7 @@ static unique_ptr<FunctionData> ICUSortKeyBind(ClientContext &context, ScalarFun
 	if (!arguments[1]->IsFoldable()) {
 		throw NotImplementedException("ICU_SORT_KEY(VARCHAR, VARCHAR) with non-constant collation is not supported");
 	}
-	Value val = ExpressionExecutor::EvaluateScalar(*arguments[1]).CastAs(LogicalType::VARCHAR);
+	Value val = ExpressionExecutor::EvaluateScalar(*arguments[1]).CastAs(context, LogicalType::VARCHAR);
 	if (val.IsNull()) {
 		throw NotImplementedException("ICU_SORT_KEY(VARCHAR, VARCHAR) expected a non-null collation");
 	}
@@ -136,8 +136,20 @@ static unique_ptr<FunctionData> ICUSortKeyBind(ClientContext &context, ScalarFun
 	}
 }
 
+static void ICUCollateSerialize(FieldWriter &writer, const FunctionData *bind_data_p, const ScalarFunction &function) {
+	throw NotImplementedException("FIXME: serialize icu-collate");
+}
+
+static unique_ptr<FunctionData> ICUCollateDeserialize(ClientContext &context, FieldReader &reader,
+                                                      ScalarFunction &bound_function) {
+	throw NotImplementedException("FIXME: serialize icu-collate");
+}
+
 static ScalarFunction GetICUFunction(const string &collation) {
-	return ScalarFunction(collation, {LogicalType::VARCHAR}, LogicalType::VARCHAR, ICUCollateFunction, ICUCollateBind);
+	ScalarFunction result(collation, {LogicalType::VARCHAR}, LogicalType::VARCHAR, ICUCollateFunction, ICUCollateBind);
+	result.serialize = ICUCollateSerialize;
+	result.deserialize = ICUCollateDeserialize;
+	return result;
 }
 
 static void SetICUTimeZone(ClientContext &context, SetScope scope, Value &parameter) {

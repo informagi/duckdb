@@ -295,7 +295,7 @@ static void endTimer(void){
     sqlite3_int64 iEnd = timeOfDay();
     struct rusage sEnd;
     getrusage(RUSAGE_SELF, &sEnd);
-    printf("Run Time: real %.3f user %f sys %f\n",
+    printf("Run Time (s): real %.3f user %f sys %f\n",
        (iEnd - iBegin)*0.001,
        timeDiff(&sBegin.ru_utime, &sEnd.ru_utime),
        timeDiff(&sBegin.ru_stime, &sEnd.ru_stime));
@@ -374,7 +374,7 @@ static void endTimer(void){
     FILETIME ftCreation, ftExit, ftKernelEnd, ftUserEnd;
     sqlite3_int64 ftWallEnd = timeOfDay();
     getProcessTimesAddr(hProcess,&ftCreation,&ftExit,&ftKernelEnd,&ftUserEnd);
-    printf("Run Time: real %.3f user %f sys %f\n",
+    printf("Run Time (s): real %.3f user %f sys %f\n",
        (ftWallEnd - ftWallBegin)*0.001,
        timeDiff(&ftUserBegin, &ftUserEnd),
        timeDiff(&ftKernelBegin, &ftKernelEnd));
@@ -10808,6 +10808,7 @@ struct ShellState {
 #define MODE_Box     16  /* Unicode box-drawing characters */
 #define MODE_Latex   17  /* Latex tabular formatting */
 #define MODE_Trash   18  /* Discard output */
+#define MODE_Jsonlines 19  /* Output JSON Lines */
 
 static const char *modeDescr[] = {
   "line",
@@ -10828,7 +10829,8 @@ static const char *modeDescr[] = {
   "table",
   "box",
   "latex",
-  "trash"
+  "trash",
+    "jsonlines"
 };
 
 /*
@@ -11822,12 +11824,19 @@ static int shell_callback(
       raw_printf(p->out,");\n");
       break;
     }
-    case MODE_Json: {
+    case MODE_Json:
+	case MODE_Jsonlines: {
       if( azArg==0 ) break;
       if( p->cnt==0 ){
-        fputs("[{", p->out);
+        if (p->cMode == MODE_Json) {
+          fputc('[', p->out);
+        }
+        fputc('{', p->out);
       }else{
-        fputs(",\n{", p->out);
+        if (p->cMode == MODE_Json) {
+          fputc(',', p->out);
+        }
+        fputs("\n{", p->out);
       }
       p->cnt++;
       for(i=0; i<nArg; i++){
@@ -12938,6 +12947,9 @@ static void exec_prepared_stmt(
       sqlite3_free(pData);
       if( pArg->cMode==MODE_Json ){
         fputs("]\n", pArg->out);
+      }
+      if( pArg->cMode==MODE_Jsonlines ){
+        fputs("\n", pArg->out);
       }
     }
   }
@@ -14372,32 +14384,40 @@ static char **readline_completion(const char *zText, int iStart, int iEnd){
 */
 static void linenoise_completion(const char *zLine, linenoiseCompletions *lc){
   int nLine = strlen30(zLine);
-  int i, iStart;
+  int copiedSuggestion = 0;
   sqlite3_stmt *pStmt = 0;
   char *zSql;
   char zBuf[1000];
 
   if( nLine>sizeof(zBuf)-30 ) return;
   if( zLine[0]=='.' || zLine[0]=='#') return;
-  for(i=nLine-1; i>=0 && (isalnum(zLine[i]) || zLine[i]=='_'); i--){}
-  if( i==nLine-1 ) return;
-  iStart = i+1;
-  memcpy(zBuf, zLine, iStart);
-  zSql = sqlite3_mprintf("SELECT DISTINCT candidate COLLATE nocase"
-                         "  FROM completion(%Q,%Q) ORDER BY 1",
-                         &zLine[iStart], zLine);
-  sqlite3_prepare_v2(globalDb, zSql, -1, &pStmt, 0);
+//  if( i==nLine-1 ) return;
+  zSql = sqlite3_mprintf("CALL sql_auto_complete(%Q)", zLine);
+  sqlite3 *localDb = NULL;
+  if (!globalDb) {
+    sqlite3_open(":memory:", &localDb);
+    sqlite3_prepare_v2(localDb, zSql, -1, &pStmt, 0);
+  } else {
+    sqlite3_prepare_v2(globalDb, zSql, -1, &pStmt, 0);
+  }
   sqlite3_free(zSql);
-  sqlite3_exec(globalDb, "PRAGMA page_count", 0, 0, 0); /* Load the schema */
   while( sqlite3_step(pStmt)==SQLITE_ROW ){
     const char *zCompletion = (const char*)sqlite3_column_text(pStmt, 0);
-    int nCompletion = sqlite3_column_bytes(pStmt, 0);
+	int nCompletion = sqlite3_column_bytes(pStmt, 0);
+	int iStart = sqlite3_column_int(pStmt, 1);
     if( iStart+nCompletion < sizeof(zBuf)-1 ){
+		if (!copiedSuggestion) {
+			memcpy(zBuf, zLine, iStart);
+			copiedSuggestion = 1;
+		}
       memcpy(zBuf+iStart, zCompletion, nCompletion+1);
       linenoiseAddCompletion(lc, zBuf);
     }
   }
   sqlite3_finalize(pStmt);
+  if (localDb) {
+	  sqlite3_close(localDb);
+  }
 }
 #endif
 
@@ -18251,6 +18271,8 @@ static int do_meta_command(char *zLine, ShellState *p){
       p->mode = MODE_Latex;
     }else if( c2=='t' && strncmp(azArg[1],"trash",n2)==0 ){
       p->mode = MODE_Trash;
+	}else if( c2=='j' && strncmp(azArg[1],"jsonlines",n2)==0 ){
+		p->mode = MODE_Jsonlines;
     }else if( nArg==1 ){
       raw_printf(p->out, "current output mode: %s\n", modeDescr[p->mode]);
     }else{
@@ -18312,7 +18334,7 @@ static int do_meta_command(char *zLine, ShellState *p){
     sqlite3_free(p->zFreeOnClose);
     p->zFreeOnClose = 0;
     p->openMode = SHELL_OPEN_UNSPEC;
-    p->openFlags = 0;
+    p->openFlags = p->openFlags & ~(SQLITE_OPEN_NOFOLLOW); // don't overwrite settings loaded in the command line
     p->szMax = 0;
     /* Check for command-line arguments */
     for(iName=1; iName<nArg && azArg[iName][0]=='-'; iName++){
@@ -20275,7 +20297,7 @@ static const char zOptions[] =
 #endif
   "   -newline SEP         set output row separator. Default: '\\n'\n"
   "   -nofollow            refuse to open symbolic links to database files\n"
-  "   -no-stdin            exit after processing options instead of reading stdin"
+  "   -no-stdin            exit after processing options instead of reading stdin\n"
   "   -nullvalue TEXT      set text string for NULL values. Default ''\n"
   "   -pagecache SIZE N    use N slots of SZ bytes each for page cache memory\n"
   "   -quote               set output mode to 'quote'\n"
@@ -20693,6 +20715,8 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv){
       data.mode = MODE_Column;
     }else if( strcmp(z,"-json")==0 ){
       data.mode = MODE_Json;
+	}else if( strcmp(z,"-jsonlines")==0 ){
+		data.mode = MODE_Jsonlines;
     }else if( strcmp(z,"-markdown")==0 ){
       data.mode = MODE_Markdown;
     }else if( strcmp(z,"-table")==0 ){

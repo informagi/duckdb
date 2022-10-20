@@ -13,6 +13,7 @@
 #include "duckdb/common/vector.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/function/table_function.hpp"
 
 namespace duckdb {
 
@@ -32,22 +33,20 @@ struct CreateIndexInfo : public CreateInfo {
 	vector<unique_ptr<ParsedExpression>> expressions;
 	vector<unique_ptr<ParsedExpression>> parsed_expressions;
 
-	vector<idx_t> column_ids;
+	//! Types used for the CREATE INDEX scan
+	vector<LogicalType> scan_types;
+	//! The names of the columns, used for the CREATE INDEX scan
+	vector<string> names;
+	//! Column IDs needed for index creation
+	vector<column_t> column_ids;
+
+protected:
+	void SerializeInternal(Serializer &serializer) const override;
 
 public:
-	unique_ptr<CreateInfo> Copy() const override {
-		auto result = make_unique<CreateIndexInfo>();
-		CopyProperties(*result);
-		result->index_type = index_type;
-		result->index_name = index_name;
-		result->constraint_type = constraint_type;
-		result->table = unique_ptr_cast<TableRef, BaseTableRef>(table->Copy());
-		for (auto &expr : expressions) {
-			result->expressions.push_back(expr->Copy());
-		}
-		result->column_ids = column_ids;
-		return move(result);
-	}
+	unique_ptr<CreateInfo> Copy() const override;
+
+	static unique_ptr<CreateIndexInfo> Deserialize(Deserializer &deserializer);
 };
 
 } // namespace duckdb

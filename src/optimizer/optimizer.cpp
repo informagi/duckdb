@@ -1,7 +1,9 @@
 #include "duckdb/optimizer/optimizer.hpp"
-#include "duckdb/main/query_profiler.hpp"
+
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/main/query_profiler.hpp"
 #include "duckdb/optimizer/column_lifetime_optimizer.hpp"
 #include "duckdb/optimizer/common_aggregate_optimizer.hpp"
 #include "duckdb/optimizer/cse_optimizer.hpp"
@@ -13,14 +15,13 @@
 #include "duckdb/optimizer/join_order_optimizer.hpp"
 #include "duckdb/optimizer/regex_range_filter.hpp"
 #include "duckdb/optimizer/remove_unused_columns.hpp"
+#include "duckdb/optimizer/rule/equal_or_null_simplification.hpp"
+#include "duckdb/optimizer/rule/in_clause_simplification.hpp"
 #include "duckdb/optimizer/rule/list.hpp"
 #include "duckdb/optimizer/statistics_propagator.hpp"
 #include "duckdb/optimizer/topn_optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
-#include "duckdb/main/config.hpp"
-
-#include "duckdb/optimizer/rule/equal_or_null_simplification.hpp"
-#include "duckdb/optimizer/rule/in_clause_simplification.hpp"
+#include "duckdb/planner/planner.hpp"
 
 namespace duckdb {
 
@@ -138,6 +139,14 @@ unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan
 		ExpressionHeuristics expression_heuristics(*this);
 		plan = expression_heuristics.Rewrite(move(plan));
 	});
+
+	for (auto &optimizer_extension : DBConfig::GetConfig(context).optimizer_extensions) {
+		RunOptimizer(OptimizerType::EXTENSION, [&]() {
+			optimizer_extension.optimize_function(context, optimizer_extension.optimizer_info.get(), plan);
+		});
+	}
+
+	Planner::VerifyPlan(context, plan);
 
 	return plan;
 }

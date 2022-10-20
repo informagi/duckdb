@@ -12,6 +12,7 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/function/function_binder.hpp"
 
 namespace duckdb {
 
@@ -63,11 +64,13 @@ string PragmaHandler::HandlePragma(SQLStatement *statement) { // PragmaInfo &inf
 	auto entry =
 	    Catalog::GetCatalog(context).GetEntry<PragmaFunctionCatalogEntry>(context, DEFAULT_SCHEMA, info.name, false);
 	string error;
-	idx_t bound_idx = Function::BindFunction(entry->name, entry->functions, info, error);
+
+	FunctionBinder function_binder(context);
+	idx_t bound_idx = function_binder.BindFunction(entry->name, entry->functions, info, error);
 	if (bound_idx == DConstants::INVALID_INDEX) {
 		throw BinderException(error);
 	}
-	auto &bound_function = entry->functions[bound_idx];
+	auto bound_function = entry->functions.GetFunctionByOffset(bound_idx);
 	if (bound_function.query) {
 		QueryErrorContext error_context(statement, statement->stmt_location);
 		Binder::BindNamedParameters(bound_function.named_parameters, info.named_parameters, error_context,

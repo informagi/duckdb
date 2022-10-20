@@ -1,5 +1,6 @@
 #include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/common/types/chunk_collection.hpp"
+#include "duckdb/function/function_binder.hpp"
 
 namespace duckdb {
 
@@ -197,7 +198,7 @@ struct SortedAggregateFunction {
 		// State variables
 		const auto input_count = order_bind->function.arguments.size();
 		auto bind_info = order_bind->bind_info.get();
-		AggregateInputData aggr_bind_info(bind_info);
+		AggregateInputData aggr_bind_info(bind_info, Allocator::DefaultAllocator());
 
 		// Inner aggregate APIs
 		auto initialize = order_bind->function.initialize;
@@ -239,12 +240,20 @@ struct SortedAggregateFunction {
 			}
 		}
 	}
+
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data, const AggregateFunction &function) {
+		throw NotImplementedException("FIXME: serialize sorted aggregate not supported");
+	}
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            AggregateFunction &function) {
+		throw NotImplementedException("FIXME: deserialize sorted aggregate not supported");
+	}
 };
 
-unique_ptr<FunctionData> AggregateFunction::BindSortedAggregate(AggregateFunction &bound_function,
-                                                                vector<unique_ptr<Expression>> &children,
-                                                                unique_ptr<FunctionData> bind_info,
-                                                                unique_ptr<BoundOrderModifier> order_bys) {
+unique_ptr<FunctionData> FunctionBinder::BindSortedAggregate(AggregateFunction &bound_function,
+                                                             vector<unique_ptr<Expression>> &children,
+                                                             unique_ptr<FunctionData> bind_info,
+                                                             unique_ptr<BoundOrderModifier> order_bys) {
 
 	auto sorted_bind = make_unique<SortedAggregateBindData>(bound_function, children, move(bind_info), *order_bys);
 
@@ -267,6 +276,8 @@ unique_ptr<FunctionData> AggregateFunction::BindSortedAggregate(AggregateFunctio
 	    AggregateFunction::StateCombine<SortedAggregateState, SortedAggregateFunction>,
 	    SortedAggregateFunction::Finalize, SortedAggregateFunction::SimpleUpdate, nullptr,
 	    AggregateFunction::StateDestroy<SortedAggregateState, SortedAggregateFunction>);
+	bound_function.serialize = SortedAggregateFunction::Serialize;
+	bound_function.deserialize = SortedAggregateFunction::Deserialize;
 
 	return move(sorted_bind);
 }

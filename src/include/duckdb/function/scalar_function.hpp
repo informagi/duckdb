@@ -49,6 +49,11 @@ typedef unique_ptr<BaseStatistics> (*function_statistics_t)(ClientContext &conte
 //! Adds the dependencies of this BoundFunctionExpression to the set of dependencies
 typedef void (*dependency_function_t)(BoundFunctionExpression &expr, unordered_set<CatalogEntry *> &dependencies);
 
+typedef void (*function_serialize_t)(FieldWriter &writer, const FunctionData *bind_data,
+                                     const ScalarFunction &function);
+typedef unique_ptr<FunctionData> (*function_deserialize_t)(ClientContext &context, FieldReader &reader,
+                                                           ScalarFunction &function);
+
 class ScalarFunction : public BaseScalarFunction {
 public:
 	DUCKDB_API ScalarFunction(string name, vector<LogicalType> arguments, LogicalType return_type,
@@ -77,19 +82,8 @@ public:
 	//! The statistics propagation function (if any)
 	function_statistics_t statistics;
 
-	DUCKDB_API static unique_ptr<Expression> BindScalarFunction(ClientContext &context, const string &schema,
-	                                                            const string &name,
-	                                                            vector<unique_ptr<Expression>> children, string &error,
-	                                                            bool is_operator = false, Binder *binder = nullptr);
-	DUCKDB_API static unique_ptr<Expression> BindScalarFunction(ClientContext &context,
-	                                                            ScalarFunctionCatalogEntry &function,
-	                                                            vector<unique_ptr<Expression>> children, string &error,
-	                                                            bool is_operator = false, Binder *binder = nullptr);
-
-	DUCKDB_API static unique_ptr<BoundFunctionExpression> BindScalarFunction(ClientContext &context,
-	                                                                         ScalarFunction bound_function,
-	                                                                         vector<unique_ptr<Expression>> children,
-	                                                                         bool is_operator = false);
+	function_serialize_t serialize;
+	function_deserialize_t deserialize;
 
 	DUCKDB_API bool operator==(const ScalarFunction &rhs) const;
 	DUCKDB_API bool operator!=(const ScalarFunction &rhs) const;

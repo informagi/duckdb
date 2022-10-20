@@ -2,6 +2,7 @@
 
 #include "duckdb/common/checksum.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/windows.hpp"
@@ -45,7 +46,20 @@ FileOpener *FileSystem::GetFileOpener(ClientContext &context) {
 	return ClientData::Get(context).file_opener.get();
 }
 
+bool PathMatched(const string &path, const string &sub_path) {
+	if (path.rfind(sub_path, 0) == 0) {
+		return true;
+	}
+	return false;
+}
+
 #ifndef _WIN32
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	auto path_separator = FileSystem::PathSeparator();
+	return PathMatched(path, path_separator);
+}
+
 string FileSystem::PathSeparator() {
 	return "/";
 }
@@ -74,6 +88,27 @@ string FileSystem::GetWorkingDirectory() {
 	return string(buffer.get());
 }
 #else
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	// 1) A single backslash
+	auto sub_path = FileSystem::PathSeparator();
+	if (PathMatched(path, sub_path)) {
+		return true;
+	}
+	// 2) check if starts with a double-backslash (i.e., \\)
+	sub_path += FileSystem::PathSeparator();
+	if (PathMatched(path, sub_path)) {
+		return true;
+	}
+	// 3) A disk designator with a backslash (e.g., C:\)
+	auto path_aux = path;
+	path_aux.erase(0, 1);
+	sub_path = ":" + FileSystem::PathSeparator();
+	if (PathMatched(path_aux, sub_path)) {
+		return true;
+	}
+	return false;
+}
 
 string FileSystem::PathSeparator() {
 	return "\\";
@@ -138,13 +173,29 @@ string FileSystem::ConvertSeparators(const string &path) {
 }
 
 string FileSystem::ExtractBaseName(const string &path) {
+	if (path.empty()) {
+		return string();
+	}
 	auto normalized_path = ConvertSeparators(path);
 	auto sep = PathSeparator();
-	auto vec = StringUtil::Split(StringUtil::Split(normalized_path, sep).back(), ".");
+	auto splits = StringUtil::Split(normalized_path, sep);
+	D_ASSERT(!splits.empty());
+	auto vec = StringUtil::Split(splits.back(), ".");
+	D_ASSERT(!vec.empty());
 	return vec[0];
 }
 
-string FileSystem::GetHomeDirectory() {
+string FileSystem::GetHomeDirectory(FileOpener *opener) {
+	// read the home_directory setting first, if it is set
+	if (opener) {
+		Value result;
+		if (opener->TryGetCurrentSetting("home_directory", result)) {
+			if (!result.IsNull() && !result.ToString().empty()) {
+				return result.ToString();
+			}
+		}
+	}
+	// fallback to the default home directories for the specified system
 #ifdef DUCKDB_WINDOWS
 	const char *homedir = getenv("USERPROFILE");
 #else
@@ -154,6 +205,16 @@ string FileSystem::GetHomeDirectory() {
 		return homedir;
 	}
 	return string();
+}
+
+string FileSystem::ExpandPath(const string &path, FileOpener *opener) {
+	if (path.empty()) {
+		return path;
+	}
+	if (path[0] == '~') {
+		return GetHomeDirectory(opener) + path.substr(1);
+	}
+	return path;
 }
 
 // LCOV_EXCL_START

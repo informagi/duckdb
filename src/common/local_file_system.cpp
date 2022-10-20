@@ -132,6 +132,7 @@ public:
 	void Close() override {
 		if (fd != -1) {
 			close(fd);
+			fd = -1;
 		}
 	};
 };
@@ -555,7 +556,11 @@ unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t fla
 }
 
 void LocalFileSystem::SetFilePointer(FileHandle &handle, idx_t location) {
-	((WindowsFileHandle &)handle).position = location;
+	auto &whandle = (WindowsFileHandle &)handle;
+	whandle.position = location;
+	LARGE_INTEGER wlocation;
+	wlocation.QuadPart = location;
+	SetFilePointerEx(whandle.fd, wlocation, NULL, FILE_BEGIN);
 }
 
 idx_t LocalFileSystem::GetFilePointer(FileHandle &handle) {
@@ -573,7 +578,8 @@ static DWORD FSInternalRead(FileHandle &handle, HANDLE hFile, void *buffer, int6
 	auto rc = ReadFile(hFile, buffer, (DWORD)nr_bytes, &bytes_read, &ov);
 	if (!rc) {
 		auto error = LocalFileSystem::GetLastErrorAsString();
-		throw IOException("Could not read file \"%s\" (error in ReadFile): %s", handle.path, error);
+		throw IOException("Could not read file \"%s\" (error in ReadFile(location: %llu, nr_bytes: %lld)): %s",
+		                  handle.path, location, nr_bytes, error);
 	}
 	return bytes_read;
 }
@@ -841,6 +847,26 @@ static void GlobFiles(FileSystem &fs, const string &path, const string &glob, bo
 	});
 }
 
+vector<string> LocalFileSystem::FetchFileWithoutGlob(const string &path, FileOpener *opener, bool absolute_path) {
+	vector<string> result;
+	if (FileExists(path) || IsPipe(path)) {
+		result.push_back(path);
+	} else if (!absolute_path) {
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				auto joined_path = JoinPath(search_path, path);
+				if (FileExists(joined_path) || IsPipe(joined_path)) {
+					result.push_back(joined_path);
+				}
+			}
+		}
+	}
+	return result;
+}
+
 vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 	if (path.empty()) {
 		return vector<string>();
@@ -874,38 +900,37 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 		absolute_path = true;
 	} else if (splits[0] == "~") {
 		// starts with home directory
-		auto home_directory = GetHomeDirectory();
+		auto home_directory = GetHomeDirectory(opener);
 		if (!home_directory.empty()) {
 			absolute_path = true;
 			splits[0] = home_directory;
+			D_ASSERT(path[0] == '~');
+			if (!HasGlob(path)) {
+				return Glob(home_directory + path.substr(1));
+			}
 		}
 	}
 	// Check if the path has a glob at all
 	if (!HasGlob(path)) {
 		// no glob: return only the file (if it exists or is a pipe)
-		vector<string> result;
-		if (FileExists(path) || IsPipe(path)) {
-			result.push_back(path);
-		} else if (!absolute_path) {
-			Value value;
-			if (opener->TryGetCurrentSetting("file_search_path", value)) {
-				auto search_paths_str = value.ToString();
-				std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
-				for (const auto &search_path : search_paths) {
-					auto joined_path = JoinPath(search_path, path);
-					if (FileExists(joined_path) || IsPipe(joined_path)) {
-						result.push_back(joined_path);
-					}
-				}
-			}
-		}
-		return result;
+		return FetchFileWithoutGlob(path, opener, absolute_path);
 	}
 	vector<string> previous_directories;
 	if (absolute_path) {
 		// for absolute paths, we don't start by scanning the current directory
 		previous_directories.push_back(splits[0]);
+	} else {
+		// If file_search_path is set, use those paths as the first glob elements
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				previous_directories.push_back(search_path);
+			}
+		}
 	}
+
 	for (idx_t i = absolute_path ? 1 : 0; i < splits.size(); i++) {
 		bool is_last_chunk = i + 1 == splits.size();
 		bool has_glob = HasGlob(splits[i]);
@@ -933,7 +958,12 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 				}
 			}
 		}
-		if (is_last_chunk || result.empty()) {
+		if (result.empty()) {
+			// no result found that matches the glob
+			// last ditch effort: search the path as a string literal
+			return FetchFileWithoutGlob(path, opener, absolute_path);
+		}
+		if (is_last_chunk) {
 			return result;
 		}
 		previous_directories = move(result);

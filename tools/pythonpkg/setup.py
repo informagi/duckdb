@@ -275,7 +275,7 @@ setup(
     description = 'DuckDB embedded database',
     keywords = 'DuckDB Database SQL OLAP',
     url="https://www.duckdb.org",
-    long_description = 'See here for an introduction: https://duckdb.org/docs/api/python',
+    long_description = 'See here for an introduction: https://duckdb.org/docs/api/python/overview',
     license='MIT',
     install_requires=[ # these version is still available for Python 2, newer ones aren't
          'numpy>=1.14'
@@ -286,7 +286,7 @@ setup(
         'duckdb-stubs'
     ],
     include_package_data=True,
-    setup_requires=setup_requires + ["setuptools_scm"] + ['pybind11>=2.6.0'],
+    setup_requires=setup_requires + ["setuptools_scm", 'numpy>=1.14', 'pybind11>=2.6.0'],
     use_scm_version = setuptools_scm_conf,
     tests_require=['google-cloud-storage', 'mypy', 'pytest'],
     classifiers = [
@@ -298,4 +298,10 @@ setup(
     maintainer = "Hannes Muehleisen",
     maintainer_email = "hannes@cwi.nl",
     cmdclass={"build_ext": build_ext},
+    project_urls={
+        "Documentation": "https://duckdb.org/docs/api/python/overview",
+        "Source": "https://github.com/duckdb/duckdb/blob/master/tools/pythonpkg",
+        "Issues": "https://github.com/duckdb/duckdb/issues",
+        "Changelog": "https://github.com/duckdb/duckdb/releases",
+    },
 )

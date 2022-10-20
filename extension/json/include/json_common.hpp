@@ -165,12 +165,21 @@ public:
 		return unique_ptr<char, decltype(free) *>(
 		    reinterpret_cast<char *>(yyjson_val_write(val, WRITE_FLAG, (size_t *)&len)), free);
 	}
+	static inline unique_ptr<char, void (*)(void *)> WriteVal(yyjson_mut_val *val, idx_t &len) {
+		return unique_ptr<char, decltype(free) *>(
+		    reinterpret_cast<char *>(yyjson_mut_val_write(val, WRITE_FLAG, (size_t *)&len)), free);
+	}
 	static unique_ptr<char, void (*)(void *)> WriteMutDoc(yyjson_mut_doc *doc, idx_t &len) {
 		return unique_ptr<char, decltype(free) *>(
 		    reinterpret_cast<char *>(yyjson_mut_write(doc, WRITE_FLAG, (size_t *)&len)), free);
 	}
 	//! Vector writes
 	static inline string_t WriteVal(yyjson_val *val, Vector &vector) {
+		idx_t len;
+		auto data = WriteVal(val, len);
+		return StringVector::AddString(vector, data.get(), len);
+	}
+	static inline string_t WriteVal(yyjson_mut_val *val, Vector &vector) {
 		idx_t len;
 		auto data = WriteVal(val, len);
 		return StringVector::AddString(vector, data.get(), len);
@@ -282,6 +291,9 @@ public:
 				    }
 			    });
 		}
+		if (args.AllConstant()) {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		}
 	}
 
 	//! JSON read function with list of path queries, i.e. json_type('[1, 2, 3]', ['$[0]', '$[1]'])
@@ -333,6 +345,10 @@ public:
 			offset += num_paths;
 		}
 		ListVector::SetListSize(result, offset);
+
+		if (args.AllConstant()) {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		}
 	}
 
 private:

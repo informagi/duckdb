@@ -1,16 +1,13 @@
 #include "duckdb/execution/index/art/node4.hpp"
+
 #include "duckdb/execution/index/art/node16.hpp"
 #include "duckdb/execution/index/art/art.hpp"
 #include "duckdb/storage/meta_block_reader.hpp"
 
 namespace duckdb {
 
-Node4::Node4(size_t compression_length) : Node(NodeType::N4, compression_length) {
+Node4::Node4() : Node(NodeType::N4) {
 	memset(key, 0, sizeof(key));
-}
-
-void Node4::ReplaceChildPointer(idx_t pos, Node *node) {
-	children[pos] = node;
 }
 
 idx_t Node4::GetChildPos(uint8_t k) {
@@ -33,7 +30,7 @@ idx_t Node4::GetChildGreaterEqual(uint8_t k, bool &equal) {
 			return pos;
 		}
 	}
-	return Node::GetChildGreaterEqual(k, equal);
+	return DConstants::INVALID_INDEX;
 }
 
 idx_t Node4::GetMin() {
@@ -53,17 +50,21 @@ Node *Node4::GetChild(ART &art, idx_t pos) {
 	return children[pos].Unswizzle(art);
 }
 
-void Node4::Insert(Node *&node, uint8_t key_byte, Node *new_child) {
+void Node4::ReplaceChildPointer(idx_t pos, Node *node) {
+	children[pos] = node;
+}
+
+void Node4::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
 	Node4 *n = (Node4 *)node;
 
-	// Insert leaf into inner node
+	// Insert new child node into node
 	if (node->count < 4) {
 		// Insert element
 		idx_t pos = 0;
 		while ((pos < node->count) && (n->key[pos] < key_byte)) {
 			pos++;
 		}
-		if (n->children[pos] != 0) {
+		if (n->children[pos]) {
 			for (idx_t i = n->count; i > pos; i--) {
 				n->key[i] = n->key[i - 1];
 				n->children[i] = n->children[i - 1];
@@ -74,22 +75,22 @@ void Node4::Insert(Node *&node, uint8_t key_byte, Node *new_child) {
 		n->count++;
 	} else {
 		// Grow to Node16
-		auto new_node = new Node16(n->prefix_length);
+		auto new_node = new Node16();
 		new_node->count = 4;
-		CopyPrefix(node, new_node);
+		new_node->prefix = move(node->prefix);
 		for (idx_t i = 0; i < 4; i++) {
 			new_node->key[i] = n->key[i];
 			new_node->children[i] = n->children[i];
 			n->children[i] = nullptr;
 		}
-		// Delete old node and replace it with new node
+		// Delete old node and replace it with new Node16
 		delete node;
 		node = new_node;
-		Node16::Insert(node, key_byte, new_child);
+		Node16::InsertChild(node, key_byte, new_child);
 	}
 }
 
-void Node4::Erase(Node *&node, int pos, ART &art) {
+void Node4::EraseChild(Node *&node, int pos, ART &art) {
 	Node4 *n = (Node4 *)node;
 	D_ASSERT(pos < n->count);
 	// erase the child and decrease the count
@@ -109,27 +110,29 @@ void Node4::Erase(Node *&node, int pos, ART &art) {
 	if (n->count == 1) {
 		auto child_ref = n->GetChild(art, 0);
 		// concatenate prefixes
-		auto new_length = node->prefix_length + child_ref->prefix_length + 1;
-		// have to allocate space in our prefix array
-		unique_ptr<uint8_t[]> new_prefix = unique_ptr<uint8_t[]>(new uint8_t[new_length]);
-
-		// first move the existing prefix (if any)
-		for (uint32_t i = 0; i < child_ref->prefix_length; i++) {
-			new_prefix[new_length - (i + 1)] = child_ref->prefix[child_ref->prefix_length - (i + 1)];
-		}
-		// now move the current key as part of the prefix
-		new_prefix[node->prefix_length] = n->key[0];
-		// finally add the old prefix
-		for (uint32_t i = 0; i < node->prefix_length; i++) {
-			new_prefix[i] = node->prefix[i];
-		}
-		// set new prefix and move the child
-		child_ref->prefix = move(new_prefix);
-		child_ref->prefix_length = new_length;
+		child_ref->prefix.Concatenate(n->key[0], node->prefix);
 		n->children[0] = nullptr;
 		delete node;
 		node = child_ref;
 	}
+}
+
+bool Node4::Merge(MergeInfo &info, idx_t depth, Node *&l_parent, idx_t l_pos) {
+
+	Node4 *r_n = (Node4 *)info.r_node;
+
+	for (idx_t i = 0; i < info.r_node->count; i++) {
+
+		auto l_child_pos = info.l_node->GetChildPos(r_n->key[i]);
+		if (!Node::MergeAtByte(info, depth, l_child_pos, i, r_n->key[i], l_parent, l_pos)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+idx_t Node4::GetSize() {
+	return 4;
 }
 
 } // namespace duckdb

@@ -152,9 +152,22 @@ bool TryTransformPythonIntegerToDouble(Value &res, py::handle ele) {
 	return true;
 }
 
-// TODO: add support for HUGEINT, UTINYINT, USMALLINT, UINTEGER maybe
-bool TryTransformPythonInteger(Value &res, py::handle ele) {
+void TransformPythonUnsigned(uint64_t value, Value &res) {
+	if (value > (uint64_t)std::numeric_limits<uint32_t>::max()) {
+		res = Value::UBIGINT(value);
+	} else if (value > (int64_t)std::numeric_limits<uint16_t>::max()) {
+		res = Value::UINTEGER(value);
+	} else if (value > (int64_t)std::numeric_limits<uint16_t>::max()) {
+		res = Value::USMALLINT(value);
+	} else {
+		res = Value::UTINYINT(value);
+	}
+}
+
+// TODO: add support for HUGEINT
+bool TryTransformPythonNumeric(Value &res, py::handle ele) {
 	auto ptr = ele.ptr();
+
 	int overflow;
 	int64_t value = PyLong_AsLongLongAndOverflow(ptr, &overflow);
 	if (overflow == -1) {
@@ -166,13 +179,14 @@ bool TryTransformPythonInteger(Value &res, py::handle ele) {
 			PyErr_Clear();
 			return TryTransformPythonIntegerToDouble(res, ele);
 		} else {
-			res = Value::UBIGINT(unsigned_value);
+			TransformPythonUnsigned(unsigned_value, res);
 		}
 		PyErr_Clear();
 		return true;
 	} else if (value == -1 && PyErr_Occurred()) {
 		return false;
 	}
+
 	if (value < (int64_t)std::numeric_limits<int32_t>::min() || value > (int64_t)std::numeric_limits<int32_t>::max()) {
 		res = Value::BIGINT(value);
 	} else if (value < (int32_t)std::numeric_limits<int16_t>::min() ||
@@ -187,59 +201,117 @@ bool TryTransformPythonInteger(Value &res, py::handle ele) {
 	return true;
 }
 
-Value TransformPythonValue(py::handle ele, const LogicalType &target_type) {
+PythonObjectType GetPythonObjectType(py::handle &ele) {
 	auto &import_cache = *DuckDBPyConnection::ImportCache();
 
 	if (ele.is_none()) {
-		return Value();
+		return PythonObjectType::None;
 	} else if (py::isinstance<py::bool_>(ele)) {
-		return Value::BOOLEAN(ele.cast<bool>());
+		return PythonObjectType::Bool;
 	} else if (py::isinstance<py::int_>(ele)) {
+		return PythonObjectType::Integer;
+	} else if (py::isinstance<py::float_>(ele)) {
+		return PythonObjectType::Float;
+	} else if (py::isinstance(ele, import_cache.decimal.Decimal())) {
+		return PythonObjectType::Decimal;
+	} else if (py::isinstance(ele, import_cache.uuid.UUID())) {
+		return PythonObjectType::Uuid;
+	} else if (py::isinstance(ele, import_cache.datetime.datetime())) {
+		return PythonObjectType::Datetime;
+	} else if (py::isinstance(ele, import_cache.datetime.time())) {
+		return PythonObjectType::Time;
+	} else if (py::isinstance(ele, import_cache.datetime.date())) {
+		return PythonObjectType::Date;
+	} else if (py::isinstance(ele, import_cache.datetime.timedelta())) {
+		return PythonObjectType::Timedelta;
+	} else if (py::isinstance<py::str>(ele)) {
+		return PythonObjectType::String;
+	} else if (py::isinstance<py::bytearray>(ele)) {
+		return PythonObjectType::ByteArray;
+	} else if (py::isinstance<py::memoryview>(ele)) {
+		return PythonObjectType::MemoryView;
+	} else if (py::isinstance<py::bytes>(ele)) {
+		return PythonObjectType::Bytes;
+	} else if (py::isinstance<py::list>(ele)) {
+		return PythonObjectType::List;
+	} else if (py::isinstance<py::dict>(ele)) {
+		return PythonObjectType::Dict;
+	} else if (py::isinstance(ele, import_cache.numpy.ndarray())) {
+		return PythonObjectType::NdArray;
+	} else {
+		return PythonObjectType::Other;
+	}
+}
+
+Value TransformPythonValue(py::handle ele, const LogicalType &target_type, bool nan_as_null) {
+	auto object_type = GetPythonObjectType(ele);
+
+	switch (object_type) {
+	case PythonObjectType::None:
+		return Value();
+	case PythonObjectType::Bool:
+		return Value::BOOLEAN(ele.cast<bool>());
+	case PythonObjectType::Integer: {
 		Value integer;
-		if (!TryTransformPythonInteger(integer, ele)) {
+		if (!TryTransformPythonNumeric(integer, ele)) {
 			throw InvalidInputException("An error occurred attempting to convert a python integer");
 		}
 		return integer;
-	} else if (py::isinstance<py::float_>(ele)) {
-		if (std::isnan(PyFloat_AsDouble(ele.ptr()))) {
+	}
+	case PythonObjectType::Float:
+		if (nan_as_null && std::isnan(PyFloat_AsDouble(ele.ptr()))) {
 			return Value();
 		}
 		return Value::DOUBLE(ele.cast<double>());
-	} else if (py::isinstance(ele, import_cache.decimal.Decimal())) {
+	case PythonObjectType::Decimal: {
 		PyDecimal decimal(ele);
 		return decimal.ToDuckValue();
-	} else if (py::isinstance(ele, import_cache.uuid.UUID())) {
+	}
+	case PythonObjectType::Uuid: {
 		auto string_val = py::str(ele).cast<string>();
 		return Value::UUID(string_val);
-	} else if (py::isinstance(ele, import_cache.datetime.datetime())) {
+	}
+	case PythonObjectType::Datetime: {
+		auto isnull_result = py::module::import("pandas").attr("isnull")(ele);
+		bool is_nat = string(py::str(isnull_result)) == "True";
+		if (is_nat) {
+			return Value();
+		}
 		auto datetime = PyDateTime(ele);
 		return datetime.ToDuckValue();
-	} else if (py::isinstance(ele, import_cache.datetime.time())) {
+	}
+	case PythonObjectType::Time: {
 		auto time = PyTime(ele);
 		return time.ToDuckValue();
-	} else if (py::isinstance(ele, import_cache.datetime.date())) {
+	}
+	case PythonObjectType::Date: {
 		auto date = PyDate(ele);
 		return date.ToDuckValue();
-	} else if (py::isinstance(ele, import_cache.datetime.timedelta())) {
+	}
+	case PythonObjectType::Timedelta: {
 		auto timedelta = PyTimeDelta(ele);
 		return Value::INTERVAL(timedelta.ToInterval());
-	} else if (py::isinstance<py::str>(ele)) {
+	}
+	case PythonObjectType::String:
 		return ele.cast<string>();
-	} else if (py::isinstance<py::bytearray>(ele)) {
+	case PythonObjectType::ByteArray: {
 		auto byte_array = ele.ptr();
 		auto bytes = PyByteArray_AsString(byte_array);
 		return Value::BLOB_RAW(bytes);
-	} else if (py::isinstance<py::memoryview>(ele)) {
+	}
+	case PythonObjectType::MemoryView: {
 		py::memoryview py_view = ele.cast<py::memoryview>();
 		PyObject *py_view_ptr = py_view.ptr();
 		Py_buffer *py_buf = PyMemoryView_GET_BUFFER(py_view_ptr);
 		return Value::BLOB(const_data_ptr_t(py_buf->buf), idx_t(py_buf->len));
-	} else if (py::isinstance<py::bytes>(ele)) {
+	}
+	case PythonObjectType::Bytes: {
 		const string &ele_string = ele.cast<string>();
 		return Value::BLOB(const_data_ptr_t(ele_string.data()), ele_string.size());
-	} else if (py::isinstance<py::list>(ele)) {
+	}
+	case PythonObjectType::List:
 		return TransformListValue(ele);
-	} else if (py::isinstance<py::dict>(ele)) {
+	case PythonObjectType::Dict: {
 		PyDictionary dict = PyDictionary(py::reinterpret_borrow<py::object>(ele));
 		switch (target_type.id()) {
 		case LogicalTypeId::STRUCT:
@@ -249,9 +321,10 @@ Value TransformPythonValue(py::handle ele, const LogicalType &target_type) {
 		default:
 			return TransformDictionary(dict);
 		}
-	} else if (py::isinstance(ele, import_cache.numpy.ndarray())) {
+	}
+	case PythonObjectType::NdArray:
 		return TransformPythonValue(ele.attr("tolist")());
-	} else {
+	case PythonObjectType::Other:
 		throw NotImplementedException("Unable to transform python value of type '%s' to DuckDB LogicalType",
 		                              py::str(ele.get_type()).cast<string>());
 	}

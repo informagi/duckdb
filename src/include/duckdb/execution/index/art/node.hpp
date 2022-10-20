@@ -8,48 +8,49 @@
 
 #pragma once
 
-#include "duckdb/execution/index/art/art_key.hpp"
 #include "duckdb/common/common.hpp"
-#include "duckdb/storage/meta_block_writer.hpp"
-#include "duckdb/storage/meta_block_reader.hpp"
+#include "duckdb/execution/index/art/art_key.hpp"
+#include "duckdb/execution/index/art/prefix.hpp"
 #include "duckdb/storage/index.hpp"
+#include "duckdb/storage/meta_block_reader.hpp"
+#include "duckdb/storage/meta_block_writer.hpp"
 
 namespace duckdb {
-enum class NodeType : uint8_t { N4 = 0, N16 = 1, N48 = 2, N256 = 3, NLeaf = 4 };
+enum class NodeType : uint8_t { NLeaf = 0, N4 = 1, N16 = 2, N48 = 3, N256 = 4 };
 class ART;
 class Node;
 
-struct SwizzleablePointer {
-	~SwizzleablePointer();
-	SwizzleablePointer(duckdb::MetaBlockReader &reader);
-	SwizzleablePointer() : pointer(0) {};
-
-	uint64_t pointer;
-
-	//! Transforms from Node* to uint64_t
-	SwizzleablePointer &operator=(const Node *ptr);
-	friend bool operator!=(const SwizzleablePointer &s_ptr, const uint64_t &ptr);
-
-public:
-	//! Extracts block info from swizzled pointer
-	BlockPointer GetSwizzledBlockInfo();
-	//! Checks if pointer is swizzled
-	bool IsSwizzled();
-	//! Deletes the underlying object (if necessary) and set the pointer to null_ptr
-	void Reset();
-	//! Unswizzle the pointer (if possible)
-	Node *Unswizzle(ART &art);
-
-	BlockPointer Serialize(ART &art, duckdb::MetaBlockWriter &writer);
-};
+// Note: SwizzleablePointer assumes top 33 bits of the block_id are 0. Use a different
+// pointer implementation if that does not hold.
+class SwizzleablePointer;
+using ARTPointer = SwizzleablePointer;
 
 struct InternalType {
-	InternalType(Node *n);
-	void Set(uint8_t *key_p, uint16_t key_size_p, SwizzleablePointer *children_p, uint16_t children_size_p);
+	explicit InternalType(Node *n);
+
+	void Set(uint8_t *key_p, uint16_t key_size_p, ARTPointer *children_p, uint16_t children_size_p);
 	uint8_t *key;
 	uint16_t key_size;
-	SwizzleablePointer *children;
+	ARTPointer *children;
 	uint16_t children_size;
+};
+
+struct MergeInfo {
+	MergeInfo(ART *l_art, ART *r_art, Node *&l_node, Node *&r_node)
+	    : l_art(l_art), r_art(r_art), l_node(l_node), r_node(r_node) {};
+	ART *l_art;
+	ART *r_art;
+	Node *&l_node;
+	Node *&r_node;
+};
+
+struct ParentsOfNodes {
+	ParentsOfNodes(Node *&l_parent, idx_t l_pos, Node *&r_parent, idx_t r_pos)
+	    : l_parent(l_parent), l_pos(l_pos), r_parent(r_parent), r_pos(r_pos) {};
+	Node *&l_parent;
+	idx_t l_pos;
+	Node *&r_parent;
+	idx_t r_pos;
 };
 
 class Node {
@@ -57,18 +58,16 @@ public:
 	static const uint8_t EMPTY_MARKER = 48;
 
 public:
-	Node(NodeType type, size_t compressed_prefix_size);
+	explicit Node(NodeType type);
 	virtual ~Node() {
 	}
 
-	//! length of the compressed path (prefix)
-	uint32_t prefix_length;
-	//! number of non-null children
+	//! Number of non-null children
 	uint16_t count;
-	//! node type
+	//! Node type
 	NodeType type;
-	//! compressed path (prefix)
-	unique_ptr<uint8_t[]> prefix;
+	//! Compressed path (prefix)
+	Prefix prefix;
 
 	//! Get the position of a child corresponding exactly to the specific byte, returns DConstants::INVALID_INDEX if not
 	//! exists
@@ -78,44 +77,48 @@ public:
 	//! Get the position of the first child that is greater or equal to the specific byte, or DConstants::INVALID_INDEX
 	//! if there are no children matching the criteria
 	virtual idx_t GetChildGreaterEqual(uint8_t k, bool &equal) {
-		throw InternalException("Unimplemented GetChildGreaterEqual for ARTNode");
+		throw InternalException("Unimplemented GetChildGreaterEqual for ART node");
 	}
-	//! Get the position of the biggest element in node
+	//! Get the position of the minimum element in the node
 	virtual idx_t GetMin();
-
-	//! Serialize this Node
-	BlockPointer Serialize(ART &art, duckdb::MetaBlockWriter &writer);
-
-	static Node *Deserialize(ART &art, idx_t block_id, idx_t offset);
-
 	//! Get the next position in the node, or DConstants::INVALID_INDEX if there is no next position. if pos ==
-	//! DConstants::INVALID_INDEX, then the first valid position in the node will be returned.
+	//! DConstants::INVALID_INDEX, then the first valid position in the node is returned
 	virtual idx_t GetNextPos(idx_t pos) {
 		return DConstants::INVALID_INDEX;
 	}
 	//! Get the child at the specified position in the node. pos should be between [0, count). Throws an assertion if
-	//! the element is not found.
+	//! the element is not found
 	virtual Node *GetChild(ART &art, idx_t pos);
-
-	//! Replaces the pointer
+	//! Replaces the pointer to a child node
 	virtual void ReplaceChildPointer(idx_t pos, Node *node);
 
-	//! Compare the key with the prefix of the node, return the number matching bytes
-	static uint32_t PrefixMismatch(Node *node, Key &key, uint64_t depth);
-	//! Insert leaf into inner node
-	static void InsertLeaf(Node *&node, uint8_t key, Node *new_node);
-	//! Erase entry from node
-	static void Erase(Node *&node, idx_t pos, ART &art);
+	//! Insert a new child node at key_byte into the node
+	static void InsertChild(Node *&node, uint8_t key_byte, Node *new_child);
+	//! Erase child node entry from node
+	static void EraseChild(Node *&node, idx_t pos, ART &art);
+	//! Get the corresponding node type for the provided size
+	static NodeType GetTypeBySize(idx_t size);
+	//! Create a new node of the specified type
+	static void New(NodeType &type, Node *&node);
 
-protected:
-	//! Copies the prefix from the source to the destination node
-	static void CopyPrefix(Node *src, Node *dst);
+	//! Returns the string representation of a node
+	string ToString(ART &art);
+	//! Serialize this node
+	BlockPointer Serialize(ART &art, duckdb::MetaBlockWriter &writer);
+
+	//! Deserialize this node
+	static Node *Deserialize(ART &art, idx_t block_id, idx_t offset);
+	//! Merge r_node into l_node at the specified byte
+	static bool MergeAtByte(MergeInfo &info, idx_t depth, idx_t &l_child_pos, idx_t &r_pos, uint8_t &key_byte,
+	                        Node *&l_parent, idx_t l_pos);
+	//! Merge two ART
+	static bool MergeARTs(ART *l_art, ART *r_art);
 
 private:
-	//! Serialize Internal Nodes
+	//! Serialize internal nodes
 	BlockPointer SerializeInternal(ART &art, duckdb::MetaBlockWriter &writer, InternalType &internal_type);
-	//! Deserialize Internal Nodes
-	void DeserializeInternal(duckdb::MetaBlockReader &reader, uint32_t prefix_length_p);
+	//! Deserialize internal nodes
+	void DeserializeInternal(duckdb::MetaBlockReader &reader);
 };
 
 } // namespace duckdb

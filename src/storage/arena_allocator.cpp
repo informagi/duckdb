@@ -41,9 +41,27 @@ data_ptr_t ArenaAllocator::Allocate(idx_t len) {
 		head = move(new_chunk);
 	}
 	D_ASSERT(head->current_position + len <= head->maximum_size);
-	auto result = head->data->get() + head->current_position;
+	auto result = head->data.get() + head->current_position;
 	head->current_position += len;
 	return result;
+}
+
+void ArenaAllocator::Reset() {
+
+	if (head) {
+		// destroy all chunks except the current one
+		if (head->next) {
+			auto current_next = move(head->next);
+			while (current_next) {
+				current_next = move(current_next->next);
+			}
+		}
+		tail = head.get();
+
+		// reset the head
+		head->current_position = 0;
+		head->prev = nullptr;
+	}
 }
 
 void ArenaAllocator::Destroy() {

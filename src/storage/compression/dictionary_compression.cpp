@@ -1,4 +1,6 @@
 #include "duckdb/common/bitpacking.hpp"
+#include "duckdb/common/operator/comparison_operators.hpp"
+#include "duckdb/common/string_map_set.hpp"
 #include "duckdb/common/types/vector_buffer.hpp"
 #include "duckdb/function/compression/compression.hpp"
 #include "duckdb/function/compression_function.hpp"
@@ -7,26 +9,8 @@
 #include "duckdb/storage/string_uncompressed.hpp"
 #include "duckdb/storage/table/append_state.hpp"
 #include "duckdb/storage/table/column_data_checkpointer.hpp"
-#include "duckdb/common/operator/comparison_operators.hpp"
 
 namespace duckdb {
-
-struct StringHash {
-	std::size_t operator()(const string_t &k) const {
-		return Hash(k);
-	}
-};
-
-struct StringEquality {
-	bool operator()(const string_t &a, const string_t &b) const {
-		return Equals::Operation(a, b);
-	}
-};
-
-template <typename T>
-using string_map_t = unordered_map<string_t, T, StringHash, StringEquality>;
-
-using string_set_t = unordered_set<string_t, StringHash, StringEquality>;
 
 // Abstract class for keeping compression state either for compression or size analysis
 class DictionaryCompressionState : public CompressionState {
@@ -189,7 +173,7 @@ public:
 		next_width = 0;
 
 		// Reset the pointers into the current segment
-		auto &buffer_manager = BufferManager::GetBufferManager(current_segment->db);
+		auto &buffer_manager = BufferManager::GetBufferManager(checkpointer.GetDatabase());
 		current_handle = buffer_manager.Pin(current_segment->block);
 		current_dictionary = DictionaryCompressionStorage::GetDictionary(*current_segment, current_handle);
 		current_end_ptr = current_handle.Ptr() + current_dictionary.end;
@@ -273,13 +257,13 @@ public:
 	}
 
 	idx_t Finalize() {
-		auto &buffer_manager = BufferManager::GetBufferManager(current_segment->db);
+		auto &buffer_manager = BufferManager::GetBufferManager(checkpointer.GetDatabase());
 		auto handle = buffer_manager.Pin(current_segment->block);
 		D_ASSERT(current_dictionary.end == Storage::BLOCK_SIZE);
 
 		// calculate sizes
 		auto compressed_selection_buffer_size =
-		    BitpackingPrimitives::GetRequiredSize<sel_t>(current_segment->count, current_width);
+		    BitpackingPrimitives::GetRequiredSize(current_segment->count, current_width);
 		auto index_buffer_size = index_buffer.size() * sizeof(uint32_t);
 		auto total_size = DictionaryCompressionStorage::DICTIONARY_HEADER_SIZE + compressed_selection_buffer_size +
 		                  index_buffer_size + current_dictionary.size;
@@ -598,7 +582,7 @@ bool DictionaryCompressionStorage::HasEnoughSpace(idx_t current_count, idx_t ind
 idx_t DictionaryCompressionStorage::RequiredSpace(idx_t current_count, idx_t index_count, idx_t dict_size,
                                                   bitpacking_width_t packing_width) {
 	idx_t base_space = DICTIONARY_HEADER_SIZE + dict_size;
-	idx_t string_number_space = BitpackingPrimitives::GetRequiredSize<sel_t>(current_count, packing_width);
+	idx_t string_number_space = BitpackingPrimitives::GetRequiredSize(current_count, packing_width);
 	idx_t index_space = index_count * sizeof(uint32_t);
 
 	idx_t used_space = base_space + index_space + string_number_space;
