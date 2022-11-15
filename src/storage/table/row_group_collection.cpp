@@ -112,6 +112,7 @@ void RowGroupCollection::InitializeParallelScan(ParallelCollectionScanState &sta
 	state.current_row_group = (RowGroup *)row_groups->GetRootSegment();
 	state.vector_index = 0;
 	state.max_row = row_start + total_rows;
+	state.batch_index = 0;
 }
 
 bool RowGroupCollection::NextParallelScan(ClientContext &context, ParallelCollectionScanState &state,
@@ -140,6 +141,7 @@ bool RowGroupCollection::NextParallelScan(ClientContext &context, ParallelCollec
 		} else {
 			state.current_row_group = (RowGroup *)state.current_row_group->Next();
 		}
+		scan_state.batch_index = ++state.batch_index;
 		if (!need_to_scan) {
 			// filters allow us to skip this row group: move to the next row group
 			continue;
@@ -428,7 +430,7 @@ idx_t RowGroupCollection::Delete(TransactionData transaction, DataTable *table, 
 //===--------------------------------------------------------------------===//
 // Update
 //===--------------------------------------------------------------------===//
-void RowGroupCollection::Update(TransactionData transaction, row_t *ids, const vector<column_t> &column_ids,
+void RowGroupCollection::Update(TransactionData transaction, row_t *ids, const vector<PhysicalIndex> &column_ids,
                                 DataChunk &updates) {
 	idx_t pos = 0;
 	do {
@@ -454,7 +456,7 @@ void RowGroupCollection::Update(TransactionData transaction, row_t *ids, const v
 		auto l = stats.GetLock();
 		for (idx_t i = 0; i < column_ids.size(); i++) {
 			auto column_id = column_ids[i];
-			stats.MergeStats(*l, column_id, *row_group->GetStatistics(column_id));
+			stats.MergeStats(*l, column_id.index, *row_group->GetStatistics(column_id.index));
 		}
 	} while (pos < updates.size());
 }
@@ -566,13 +568,14 @@ vector<vector<Value>> RowGroupCollection::GetStorageInfo() {
 //===--------------------------------------------------------------------===//
 // Alter
 //===--------------------------------------------------------------------===//
-shared_ptr<RowGroupCollection> RowGroupCollection::AddColumn(ColumnDefinition &new_column, Expression *default_value) {
+shared_ptr<RowGroupCollection> RowGroupCollection::AddColumn(ClientContext &context, ColumnDefinition &new_column,
+                                                             Expression *default_value) {
 	idx_t new_column_idx = types.size();
 	auto new_types = types;
 	new_types.push_back(new_column.GetType());
 	auto result = make_shared<RowGroupCollection>(info, block_manager, move(new_types), row_start, total_rows.load());
 
-	ExpressionExecutor executor(GetAllocator());
+	ExpressionExecutor executor(context);
 	DataChunk dummy_chunk;
 	Vector default_vector(new_column.GetType());
 	if (!default_value) {
@@ -615,7 +618,8 @@ shared_ptr<RowGroupCollection> RowGroupCollection::RemoveColumn(idx_t col_idx) {
 	return result;
 }
 
-shared_ptr<RowGroupCollection> RowGroupCollection::AlterType(idx_t changed_idx, const LogicalType &target_type,
+shared_ptr<RowGroupCollection> RowGroupCollection::AlterType(ClientContext &context, idx_t changed_idx,
+                                                             const LogicalType &target_type,
                                                              vector<column_t> bound_columns, Expression &cast_expr) {
 	D_ASSERT(changed_idx < types.size());
 	auto new_types = types;
@@ -635,7 +639,7 @@ shared_ptr<RowGroupCollection> RowGroupCollection::AlterType(idx_t changed_idx, 
 	DataChunk scan_chunk;
 	scan_chunk.Initialize(GetAllocator(), scan_types);
 
-	ExpressionExecutor executor(GetAllocator());
+	ExpressionExecutor executor(context);
 	executor.AddExpression(cast_expr);
 
 	TableScanState scan_state;
@@ -663,14 +667,15 @@ void RowGroupCollection::VerifyNewConstraint(DataTable &parent, const BoundConst
 	// scan the original table, check if there's any null value
 	auto &not_null_constraint = (BoundNotNullConstraint &)constraint;
 	vector<LogicalType> scan_types;
-	D_ASSERT(not_null_constraint.index < types.size());
-	scan_types.push_back(types[not_null_constraint.index]);
+	auto physical_index = not_null_constraint.index.index;
+	D_ASSERT(physical_index < types.size());
+	scan_types.push_back(types[physical_index]);
 	DataChunk scan_chunk;
 	scan_chunk.Initialize(GetAllocator(), scan_types);
 
 	CreateIndexScanState state;
 	vector<column_t> cids;
-	cids.push_back(not_null_constraint.index);
+	cids.push_back(physical_index);
 	// Use ScanCommitted to scan the latest committed data
 	state.Initialize(cids, nullptr);
 	InitializeScan(state.table_state, cids, nullptr);
@@ -684,7 +689,7 @@ void RowGroupCollection::VerifyNewConstraint(DataTable &parent, const BoundConst
 		// Check constraint
 		if (VectorOperations::HasNull(scan_chunk.data[0], scan_chunk.size())) {
 			throw ConstraintException("NOT NULL constraint failed: %s.%s", info->table,
-			                          parent.column_definitions[not_null_constraint.index].GetName());
+			                          parent.column_definitions[physical_index].GetName());
 		}
 	}
 }
