@@ -3,36 +3,63 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
+#include "duckdb/planner/expression/list.hpp"
 
 namespace duckdb {
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator) : allocator(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(&context) {
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression *expression)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression *expression)
+    : ExpressionExecutor(context) {
 	D_ASSERT(expression);
 	AddExpression(*expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression &expression)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression &expression)
+    : ExpressionExecutor(context) {
 	AddExpression(expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const vector<unique_ptr<Expression>> &exprs)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<unique_ptr<Expression>> &exprs)
+    : ExpressionExecutor(context) {
 	D_ASSERT(exprs.size() > 0);
 	for (auto &expr : exprs) {
 		AddExpression(*expr);
 	}
 }
 
+ExpressionExecutor::ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs) : context(nullptr) {
+	D_ASSERT(exprs.size() > 0);
+	for (auto &expr : exprs) {
+		AddExpression(*expr);
+	}
+}
+
+ExpressionExecutor::ExpressionExecutor() : context(nullptr) {
+}
+
+bool ExpressionExecutor::HasContext() {
+	return context;
+}
+
+ClientContext &ExpressionExecutor::GetContext() {
+	if (!context) {
+		throw InternalException("Calling ExpressionExecutor::GetContext on an expression executor without a context");
+	}
+	return *context;
+}
+
+Allocator &ExpressionExecutor::GetAllocator() {
+	return context ? Allocator::Get(*context) : Allocator::DefaultAllocator();
+}
+
 void ExpressionExecutor::AddExpression(const Expression &expr) {
 	expressions.push_back(&expr);
-	auto state = make_unique<ExpressionExecutorState>(expr.ToString());
+	auto state = make_uniq<ExpressionExecutorState>();
 	Initialize(expr, *state);
-	states.push_back(move(state));
+	state->Verify();
+	states.push_back(std::move(state));
 }
 
 void ExpressionExecutor::Initialize(const Expression &expression, ExpressionExecutorState &state) {
@@ -79,11 +106,11 @@ void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result) {
 	states[expr_idx]->profiler.EndSample(chunk ? chunk->size() : 0);
 }
 
-Value ExpressionExecutor::EvaluateScalar(const Expression &expr, bool allow_unfoldable) {
+Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expression &expr, bool allow_unfoldable) {
 	D_ASSERT(allow_unfoldable || expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
 	// use an ExpressionExecutor to execute the expression
-	ExpressionExecutor executor(Allocator::DefaultAllocator(), expr);
+	ExpressionExecutor executor(context, expr);
 
 	Vector result(expr.return_type);
 	executor.ExecuteExpression(result);
@@ -94,9 +121,9 @@ Value ExpressionExecutor::EvaluateScalar(const Expression &expr, bool allow_unfo
 	return result_value;
 }
 
-bool ExpressionExecutor::TryEvaluateScalar(const Expression &expr, Value &result) {
+bool ExpressionExecutor::TryEvaluateScalar(ClientContext &context, const Expression &expr, Value &result) {
 	try {
-		result = EvaluateScalar(expr);
+		result = EvaluateScalar(context, expr);
 		return true;
 	} catch (InternalException &ex) {
 		throw ex;
@@ -199,11 +226,11 @@ idx_t ExpressionExecutor::Select(const Expression &expr, ExpressionState *state,
 	D_ASSERT(expr.return_type.id() == LogicalTypeId::BOOLEAN);
 	switch (expr.expression_class) {
 	case ExpressionClass::BOUND_BETWEEN:
-		return Select((BoundBetweenExpression &)expr, state, sel, count, true_sel, false_sel);
+		return Select(expr.Cast<BoundBetweenExpression>(), state, sel, count, true_sel, false_sel);
 	case ExpressionClass::BOUND_COMPARISON:
-		return Select((BoundComparisonExpression &)expr, state, sel, count, true_sel, false_sel);
+		return Select(expr.Cast<BoundComparisonExpression>(), state, sel, count, true_sel, false_sel);
 	case ExpressionClass::BOUND_CONJUNCTION:
-		return Select((BoundConjunctionExpression &)expr, state, sel, count, true_sel, false_sel);
+		return Select(expr.Cast<BoundConjunctionExpression>(), state, sel, count, true_sel, false_sel);
 	default:
 		return DefaultSelect(expr, state, sel, count, true_sel, false_sel);
 	}

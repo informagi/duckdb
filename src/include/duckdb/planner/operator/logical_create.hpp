@@ -16,16 +16,21 @@ namespace duckdb {
 //! LogicalCreate represents a CREATE operator
 class LogicalCreate : public LogicalOperator {
 public:
-	LogicalCreate(LogicalOperatorType type, unique_ptr<CreateInfo> info, SchemaCatalogEntry *schema = nullptr)
-	    : LogicalOperator(type), schema(schema), info(move(info)) {
+	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_INVALID;
+
+public:
+	LogicalCreate(LogicalOperatorType type, unique_ptr<CreateInfo> info,
+	              optional_ptr<SchemaCatalogEntry> schema = nullptr)
+	    : LogicalOperator(type), schema(schema), info(std::move(info)) {
 	}
 
-	SchemaCatalogEntry *schema;
+	optional_ptr<SchemaCatalogEntry> schema;
 	unique_ptr<CreateInfo> info;
 
 public:
 	void Serialize(FieldWriter &writer) const override;
 	static unique_ptr<LogicalOperator> Deserialize(LogicalDeserializationState &state, FieldReader &reader);
+	idx_t EstimateCardinality(ClientContext &context) override;
 
 protected:
 	void ResolveTypes() override {

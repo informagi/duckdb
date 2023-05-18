@@ -4,11 +4,34 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/vector_operations/ternary_executor.hpp"
-#include "duckdb/storage/statistics/string_statistics.hpp"
+
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "utf8proc.hpp"
+#include "duckdb/common/types/blob.hpp"
 
 namespace duckdb {
+
+static const int64_t SUPPORTED_UPPER_BOUND = NumericLimits<uint32_t>::Maximum();
+static const int64_t SUPPORTED_LOWER_BOUND = -SUPPORTED_UPPER_BOUND - 1;
+
+static inline void AssertInSupportedRange(idx_t input_size, int64_t offset, int64_t length) {
+
+	if (input_size > (uint64_t)SUPPORTED_UPPER_BOUND) {
+		throw OutOfRangeException("Substring input size is too large (> %d)", SUPPORTED_UPPER_BOUND);
+	}
+	if (offset < SUPPORTED_LOWER_BOUND) {
+		throw OutOfRangeException("Substring offset outside of supported range (< %d)", SUPPORTED_LOWER_BOUND);
+	}
+	if (offset > SUPPORTED_UPPER_BOUND) {
+		throw OutOfRangeException("Substring offset outside of supported range (> %d)", SUPPORTED_UPPER_BOUND);
+	}
+	if (length < SUPPORTED_LOWER_BOUND) {
+		throw OutOfRangeException("Substring length outside of supported range (< %d)", SUPPORTED_LOWER_BOUND);
+	}
+	if (length > SUPPORTED_UPPER_BOUND) {
+		throw OutOfRangeException("Substring length outside of supported range (> %d)", SUPPORTED_UPPER_BOUND);
+	}
+}
 
 string_t SubstringEmptyString(Vector &result) {
 	auto result_string = StringVector::EmptyString(result, 0);
@@ -49,7 +72,7 @@ bool SubstringStartEnd(int64_t input_size, int64_t offset, int64_t length, int64
 	} else {
 		// negative length: go backwards (i.e. end = start, start = start + length)
 		end = start;
-		start = MaxValue<int64_t>(0, end + length);
+		start = MaxValue<int64_t>(0, start + length);
 	}
 	if (start == end) {
 		return false;
@@ -59,8 +82,10 @@ bool SubstringStartEnd(int64_t input_size, int64_t offset, int64_t length, int64
 }
 
 string_t SubstringASCII(Vector &result, string_t input, int64_t offset, int64_t length) {
-	auto input_data = input.GetDataUnsafe();
+	auto input_data = input.GetData();
 	auto input_size = input.GetSize();
+
+	AssertInSupportedRange(input_size, offset, length);
 
 	int64_t start, end;
 	if (!SubstringStartEnd(input_size, offset, length, start, end)) {
@@ -70,8 +95,10 @@ string_t SubstringASCII(Vector &result, string_t input, int64_t offset, int64_t 
 }
 
 string_t SubstringFun::SubstringUnicode(Vector &result, string_t input, int64_t offset, int64_t length) {
-	auto input_data = input.GetDataUnsafe();
+	auto input_data = input.GetData();
 	auto input_size = input.GetSize();
+
+	AssertInSupportedRange(input_size, offset, length);
 
 	if (length == 0) {
 		return SubstringEmptyString(result);
@@ -112,6 +139,13 @@ string_t SubstringFun::SubstringUnicode(Vector &result, string_t input, int64_t 
 				}
 			}
 		}
+		while (!LengthFun::IsCharacter(input_data[start_pos])) {
+			start_pos++;
+		}
+		while (end_pos < input_size && !LengthFun::IsCharacter(input_data[end_pos])) {
+			end_pos++;
+		}
+
 		if (end_pos == DConstants::INVALID_INDEX) {
 			return SubstringEmptyString(result);
 		}
@@ -123,14 +157,15 @@ string_t SubstringFun::SubstringUnicode(Vector &result, string_t input, int64_t 
 		int64_t start, end;
 
 		// we express start and end as unicode codepoints from the front
+		offset--;
 		if (length < 0) {
 			// negative length
-			start = MaxValue<int64_t>(0, offset + length - 1);
-			end = offset - 1;
+			start = MaxValue<int64_t>(0, offset + length);
+			end = offset;
 		} else {
 			// positive length
-			start = MaxValue<int64_t>(0, offset - 1);
-			end = offset + length - 1;
+			start = MaxValue<int64_t>(0, offset);
+			end = offset + length;
 		}
 
 		int64_t current_character = 0;
@@ -155,8 +190,10 @@ string_t SubstringFun::SubstringUnicode(Vector &result, string_t input, int64_t 
 }
 
 string_t SubstringFun::SubstringGrapheme(Vector &result, string_t input, int64_t offset, int64_t length) {
-	auto input_data = input.GetDataUnsafe();
+	auto input_data = input.GetData();
 	auto input_size = input.GetSize();
+
+	AssertInSupportedRange(input_size, offset, length);
 
 	// we don't know yet if the substring is ascii, but we assume it is (for now)
 	// first get the start and end as if this was an ascii string
@@ -242,7 +279,7 @@ static void SubstringFunction(DataChunk &args, ExpressionState &state, Vector &r
 	} else {
 		BinaryExecutor::Execute<string_t, int64_t, string_t>(
 		    input_vector, offset_vector, result, args.size(), [&](string_t input_string, int64_t offset) {
-			    return OP::Substring(result, input_string, offset, NumericLimits<int64_t>::Maximum() - offset);
+			    return OP::Substring(result, input_string, offset, NumericLimits<uint32_t>::Maximum());
 		    });
 	}
 }
@@ -261,7 +298,7 @@ static void SubstringFunctionASCII(DataChunk &args, ExpressionState &state, Vect
 	} else {
 		BinaryExecutor::Execute<string_t, int64_t, string_t>(
 		    input_vector, offset_vector, result, args.size(), [&](string_t input_string, int64_t offset) {
-			    return SubstringASCII(result, input_string, offset, NumericLimits<int64_t>::Maximum() - offset);
+			    return SubstringASCII(result, input_string, offset, NumericLimits<uint32_t>::Maximum());
 		    });
 	}
 }
@@ -270,12 +307,8 @@ static unique_ptr<BaseStatistics> SubstringPropagateStats(ClientContext &context
 	auto &child_stats = input.child_stats;
 	auto &expr = input.expr;
 	// can only propagate stats if the children have stats
-	if (!child_stats[0]) {
-		return nullptr;
-	}
 	// we only care about the stats of the first child (i.e. the string)
-	auto &sstats = (StringStatistics &)*child_stats[0];
-	if (!sstats.has_unicode) {
+	if (!StringStats::CanContainUnicode(child_stats[0])) {
 		expr.function.function = SubstringFunctionASCII;
 	}
 	return nullptr;

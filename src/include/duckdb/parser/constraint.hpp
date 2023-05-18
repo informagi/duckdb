@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/vector.hpp"
+#include "duckdb/common/exception.hpp"
 
 namespace duckdb {
 
@@ -42,9 +43,9 @@ struct ForeignKeyInfo {
 	//! key table
 	string table;
 	//! The set of main key table's column's index
-	vector<storage_t> pk_keys;
+	vector<PhysicalIndex> pk_keys;
 	//! The set of foreign key table's column's index
-	vector<storage_t> fk_keys;
+	vector<PhysicalIndex> fk_keys;
 };
 
 //! Constraint is the base class of any type of table constraint.
@@ -66,5 +67,22 @@ public:
 	DUCKDB_API virtual void Serialize(FieldWriter &writer) const = 0;
 	//! Deserializes a blob back into a Constraint
 	DUCKDB_API static unique_ptr<Constraint> Deserialize(Deserializer &source);
+
+public:
+	template <class TARGET>
+	TARGET &Cast() {
+		if (type != TARGET::TYPE) {
+			throw InternalException("Failed to cast constraint to type - constraint type mismatch");
+		}
+		return (TARGET &)*this;
+	}
+
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (type != TARGET::TYPE) {
+			throw InternalException("Failed to cast constraint to type - constraint type mismatch");
+		}
+		return (const TARGET &)*this;
+	}
 };
 } // namespace duckdb

@@ -18,11 +18,18 @@ formatted_directories = ['src', 'benchmark', 'test', 'tools', 'examples', 'exten
 ignored_files = ['tpch_constants.hpp', 'tpcds_constants.hpp', '_generated', 'tpce_flat_input.hpp',
                  'test_csv_header.hpp', 'duckdb.cpp', 'duckdb.hpp', 'json.hpp', 'sqlite3.h', 'shell.c',
                  'termcolor.hpp', 'test_insert_invalid.test', 'httplib.hpp', 'os_win.c', 'glob.c', 'printf.c',
-                 'helper.hpp', 'single_thread_ptr.hpp','types.hpp', 'default_views.cpp', 'default_functions.cpp',
+                 'helper.hpp', 'single_thread_ptr.hpp', 'types.hpp', 'default_views.cpp', 'default_functions.cpp',
                  'release.h', 'genrand.cpp', 'address.cpp', 'visualizer_constants.hpp', 'icu-collate.cpp', 'icu-collate.hpp',
-                 'yyjson.cpp', 'yyjson.hpp', 'duckdb_pdqsort.hpp',
-                 'nf_calendar.cpp', 'nf_calendar.h', 'nf_localedata.cpp', 'nf_localedata.h', 'nf_zformat.cpp', 'nf_zformat.h', 'expr.cc']
-ignored_directories = ['.eggs', '__pycache__', 'icu', 'dbgen', os.path.join('tools', 'pythonpkg', 'duckdb'), os.path.join('tools', 'pythonpkg', 'build'), os.path.join('tools', 'rpkg', 'src', 'duckdb'), os.path.join('tools', 'rpkg', 'inst', 'include', 'cpp11'), os.path.join('extension', 'tpcds', 'dsdgen')]
+                 'yyjson.cpp', 'yyjson.hpp', 'duckdb_pdqsort.hpp', 'stubdata.cpp',
+                 'nf_calendar.cpp', 'nf_calendar.h', 'nf_localedata.cpp', 'nf_localedata.h', 'nf_zformat.cpp',
+                 'nf_zformat.h', 'expr.cc', 'function_list.cpp']
+ignored_directories = ['.eggs', '__pycache__', 'dbgen', os.path.join('tools', 'pythonpkg', 'duckdb'),
+                       os.path.join('tools', 'pythonpkg', 'build'), os.path.join('tools', 'rpkg', 'src', 'duckdb'),
+                       os.path.join('tools', 'rpkg', 'inst', 'include', 'cpp11'),
+                       os.path.join('extension', 'tpcds', 'dsdgen'), os.path.join('extension', 'jemalloc', 'jemalloc'),
+                       os.path.join('extension', 'json', 'yyjson'), os.path.join('extension', 'icu', 'third_party'),
+                       os.path.join('src', 'include', 'duckdb', 'core_functions', 'aggregate'),
+                       os.path.join('src', 'include', 'duckdb', 'core_functions', 'scalar')]
 format_all = False
 check_only = True
 confirm = True
@@ -62,13 +69,24 @@ if len(sys.argv) > 2:
 if revision == '--all':
     format_all = True
 
+def file_is_ignored(full_path):
+    if os.path.basename(full_path) in ignored_files:
+        return True
+    dirnames = os.path.sep.join(full_path.split(os.path.sep)[:-1])
+    for ignored_directory in ignored_directories:
+        if ignored_directory in dirnames:
+            return True
+    return False
+
+
+
 def can_format_file(full_path):
     global extensions, formatted_directories, ignored_files
     if not os.path.isfile(full_path):
         return False
     fname = full_path.split(os.path.sep)[-1]
     # check ignored files
-    if fname in ignored_files:
+    if file_is_ignored(full_path):
         return False
     found = False
     # check file extension
@@ -96,6 +114,8 @@ def get_changed_files(revision):
     changed_files = []
     for f in files:
         if not can_format_file(f):
+            continue
+        if file_is_ignored(f):
             continue
         changed_files.append(f)
     return changed_files
@@ -233,6 +253,7 @@ def format_file(f, full_path, directory, ext):
     old_lines = old_text.split('\n')
 
     new_text = get_formatted_text(f, full_path, directory, ext)
+    new_text = new_text.replace('ARGS &&...args', 'ARGS &&... args')
     if check_only:
         new_lines = new_text.split('\n')
         old_lines = [x for x in old_lines if '...' not in x]

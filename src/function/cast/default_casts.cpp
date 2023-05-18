@@ -1,13 +1,14 @@
 #include "duckdb/function/cast/default_casts.hpp"
-#include "duckdb/common/operator/cast_operators.hpp"
-#include "duckdb/function/cast/vector_cast_helpers.hpp"
-#include "duckdb/common/types/cast_helpers.hpp"
-#include "duckdb/common/types/chunk_collection.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
-#include "duckdb/common/types/null_value.hpp"
-#include "duckdb/common/string_util.hpp"
+
 #include "duckdb/common/likely.hpp"
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/cast_helpers.hpp"
+#include "duckdb/common/types/chunk_collection.hpp"
+#include "duckdb/common/types/null_value.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/function/cast/vector_cast_helpers.hpp"
 
 namespace duckdb {
 
@@ -17,12 +18,13 @@ BindCastInfo::~BindCastInfo() {
 BoundCastData::~BoundCastData() {
 }
 
-BoundCastInfo::BoundCastInfo(cast_function_t function_p, unique_ptr<BoundCastData> cast_data_p)
-    : function(function_p), cast_data(move(cast_data_p)) {
+BoundCastInfo::BoundCastInfo(cast_function_t function_p, unique_ptr<BoundCastData> cast_data_p,
+                             init_cast_local_state_t init_local_state_p)
+    : function(function_p), init_local_state(init_local_state_p), cast_data(std::move(cast_data_p)) {
 }
 
 BoundCastInfo BoundCastInfo::Copy() const {
-	return BoundCastInfo(function, cast_data ? cast_data->Copy() : nullptr);
+	return BoundCastInfo(function, cast_data ? cast_data->Copy() : nullptr, init_local_state);
 }
 
 bool DefaultCasts::NopCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
@@ -71,7 +73,14 @@ static bool NullTypeCast(Vector &source, Vector &result, idx_t count, CastParame
 BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const LogicalType &source,
                                                    const LogicalType &target) {
 	D_ASSERT(source != target);
-	// first switch on source type
+
+	// first check if were casting to a union
+	if (source.id() != LogicalTypeId::UNION && source.id() != LogicalTypeId::SQLNULL &&
+	    target.id() == LogicalTypeId::UNION) {
+		return ImplicitToUnionCast(input, source, target);
+	}
+
+	// else, switch on source type
 	switch (source.id()) {
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::TINYINT:
@@ -110,11 +119,12 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 		return TimestampSecCastSwitch(input, source, target);
 	case LogicalTypeId::INTERVAL:
 		return IntervalCastSwitch(input, source, target);
-	case LogicalTypeId::JSON:
 	case LogicalTypeId::VARCHAR:
 		return StringCastSwitch(input, source, target);
 	case LogicalTypeId::BLOB:
 		return BlobCastSwitch(input, source, target);
+	case LogicalTypeId::BIT:
+		return BitCastSwitch(input, source, target);
 	case LogicalTypeId::SQLNULL:
 		return NullTypeCast;
 	case LogicalTypeId::MAP:
@@ -123,6 +133,8 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 		return StructCastSwitch(input, source, target);
 	case LogicalTypeId::LIST:
 		return ListCastSwitch(input, source, target);
+	case LogicalTypeId::UNION:
+		return UnionCastSwitch(input, source, target);
 	case LogicalTypeId::ENUM:
 		return EnumCastSwitch(input, source, target);
 	case LogicalTypeId::AGGREGATE_STATE:

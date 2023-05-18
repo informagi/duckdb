@@ -8,7 +8,7 @@
   "dependencies": {
     "@mapbox/node-pre-gyp": "^1.0.0",
     "node-addon-api": "*",
-    "node-gyp": "^7.1.2"
+    "node-gyp": "^9.3.0"
   },
   "binary": {
     "module_name": "duckdb",
@@ -18,7 +18,8 @@
   "scripts": {
     "install": "node-pre-gyp install --fallback-to-build",
     "pretest": "node test/support/createdb.js",
-    "test": "mocha -R spec --timeout 480000",
+    "test": "mocha -R spec --timeout 480000 --expose-gc",
+    "test-path": "mocha -R spec --timeout 480000 --expose-gc --exclude 'test/*.ts'",
     "pack": "node-pre-gyp package"
   },
   "directories": {
@@ -26,8 +27,10 @@
     "test": "test"
   },
   "devDependencies": {
+    "@types/chai": "^4.3.4",
     "@types/mocha": "^10.0.0",
     "@types/node": "^18.11.0",
+    "apache-arrow": "^9.0.0",
     "aws-sdk": "^2.790.0",
     "chai": "^4.3.6",
     "jsdoc3-parser": "^2.0.0",
@@ -38,7 +41,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cwida/duckdb.git"
+    "url": "git+https://github.com/duckdb/duckdb.git"
   },
   "ts-node": {
     "require": [
@@ -51,9 +54,9 @@
     "duckdb"
   ],
   "author": "Hannes Mühleisen",
-  "license": "MPL-2.0",
+  "license": "MIT",
   "bugs": {
-    "url": "https://github.com/cwida/duckdb/issues"
+    "url": "https://github.com/duckdb/duckdb/issues"
   },
   "homepage": "https://www.duckdb.org"
 }

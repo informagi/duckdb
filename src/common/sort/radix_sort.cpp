@@ -17,7 +17,7 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 		return;
 	}
 	// Fill pointer array for sorting
-	auto ptr_block = unique_ptr<data_ptr_t[]>(new data_ptr_t[end - start]);
+	auto ptr_block = make_unsafe_uniq_array<data_ptr_t>(end - start);
 	auto entry_ptrs = (data_ptr_t *)ptr_block.get();
 	for (idx_t i = start; i < end; i++) {
 		entry_ptrs[i - start] = row_ptr;
@@ -38,14 +38,13 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 		          return order * Comparators::CompareVal(left_ptr, right_ptr, logical_type) < 0;
 	          });
 	// Re-order
-	auto temp_block =
-	    buffer_manager.Allocate(MaxValue((end - start) * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-	data_ptr_t temp_ptr = temp_block.Ptr();
+	auto temp_block = buffer_manager.GetBufferAllocator().Allocate((end - start) * sort_layout.entry_size);
+	data_ptr_t temp_ptr = temp_block.get();
 	for (idx_t i = 0; i < end - start; i++) {
 		FastMemcpy(temp_ptr, entry_ptrs[i], sort_layout.entry_size);
 		temp_ptr += sort_layout.entry_size;
 	}
-	memcpy(dataptr + start * sort_layout.entry_size, temp_block.Ptr(), (end - start) * sort_layout.entry_size);
+	memcpy(dataptr + start * sort_layout.entry_size, temp_block.get(), (end - start) * sort_layout.entry_size);
 	// Determine if there are still ties (if this is not the last column)
 	if (tie_col < sort_layout.column_count - 1) {
 		data_ptr_t idx_ptr = dataptr + start * sort_layout.entry_size + sort_layout.comparison_size;
@@ -110,7 +109,7 @@ static void ComputeTies(data_ptr_t dataptr, const idx_t &count, const idx_t &col
 //! Textbook LSD radix sort
 void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, const idx_t &count, const idx_t &col_offset,
                   const idx_t &row_width, const idx_t &sorting_size) {
-	auto temp_block = buffer_manager.Allocate(MaxValue(count * row_width, (idx_t)Storage::BLOCK_SIZE));
+	auto temp_block = buffer_manager.GetBufferAllocator().Allocate(count * row_width);
 	bool swap = false;
 
 	idx_t counts[SortConstants::VALUES_PER_RADIX];
@@ -118,8 +117,8 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 		// Init counts to 0
 		memset(counts, 0, sizeof(counts));
 		// Const some values for convenience
-		const data_ptr_t source_ptr = swap ? temp_block.Ptr() : dataptr;
-		const data_ptr_t target_ptr = swap ? dataptr : temp_block.Ptr();
+		const data_ptr_t source_ptr = swap ? temp_block.get() : dataptr;
+		const data_ptr_t target_ptr = swap ? dataptr : temp_block.get();
 		const idx_t offset = col_offset + sorting_size - r;
 		// Collect counts
 		data_ptr_t offset_ptr = source_ptr + offset;
@@ -147,7 +146,7 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 	}
 	// Move data back to original buffer (if it was swapped)
 	if (swap) {
-		memcpy(dataptr, temp_block.Ptr(), count * row_width);
+		memcpy(dataptr, temp_block.get(), count * row_width);
 	}
 }
 
@@ -159,7 +158,7 @@ inline void InsertionSort(const data_ptr_t orig_ptr, const data_ptr_t temp_ptr, 
 	const data_ptr_t target_ptr = swap ? orig_ptr : temp_ptr;
 	if (count > 1) {
 		const idx_t total_offset = col_offset + offset;
-		auto temp_val = unique_ptr<data_t[]>(new data_t[row_width]);
+		auto temp_val = make_unsafe_uniq_array<data_t>(row_width);
 		const data_ptr_t val = temp_val.get();
 		const auto comp_width = total_comp_width - offset;
 		for (idx_t i = 1; i < count; i++) {
@@ -250,7 +249,7 @@ void RadixSort(BufferManager &buffer_manager, const data_ptr_t &dataptr, const i
 		RadixSortLSD(buffer_manager, dataptr, count, col_offset, sort_layout.entry_size, sorting_size);
 	} else {
 		auto temp_block = buffer_manager.Allocate(MaxValue(count * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-		auto preallocated_array = unique_ptr<idx_t[]>(new idx_t[sorting_size * SortConstants::MSD_RADIX_LOCATIONS]);
+		auto preallocated_array = make_unsafe_uniq_array<idx_t>(sorting_size * SortConstants::MSD_RADIX_LOCATIONS);
 		RadixSortMSD(dataptr, temp_block.Ptr(), count, col_offset, sort_layout.entry_size, sorting_size, 0,
 		             preallocated_array.get(), false);
 	}
@@ -292,7 +291,7 @@ void LocalSortState::SortInMemory() {
 	// Radix sort and break ties until no more ties, or until all columns are sorted
 	idx_t sorting_size = 0;
 	idx_t col_offset = 0;
-	unique_ptr<bool[]> ties_ptr;
+	unsafe_unique_array<bool> ties_ptr;
 	bool *ties = nullptr;
 	bool contains_string = false;
 	for (idx_t i = 0; i < sort_layout->column_count; i++) {
@@ -306,7 +305,7 @@ void LocalSortState::SortInMemory() {
 		if (!ties) {
 			// This is the first sort
 			RadixSort(*buffer_manager, dataptr, count, col_offset, sorting_size, *sort_layout, contains_string);
-			ties_ptr = unique_ptr<bool[]>(new bool[count]);
+			ties_ptr = make_unsafe_uniq_array<bool>(count);
 			ties = ties_ptr.get();
 			std::fill_n(ties, count - 1, true);
 			ties[count - 1] = false;

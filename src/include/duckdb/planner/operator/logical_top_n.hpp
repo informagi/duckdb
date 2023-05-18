@@ -16,8 +16,11 @@ namespace duckdb {
 //! LogicalTopN represents a comibination of ORDER BY and LIMIT clause, using Min/Max Heap
 class LogicalTopN : public LogicalOperator {
 public:
+	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_TOP_N;
+
+public:
 	LogicalTopN(vector<BoundOrderByNode> orders, int64_t limit, int64_t offset)
-	    : LogicalOperator(LogicalOperatorType::LOGICAL_TOP_N), orders(move(orders)), limit(limit), offset(offset) {
+	    : LogicalOperator(LogicalOperatorType::LOGICAL_TOP_N), orders(std::move(orders)), limit(limit), offset(offset) {
 	}
 
 	vector<BoundOrderByNode> orders;
@@ -32,6 +35,7 @@ public:
 	}
 	void Serialize(FieldWriter &writer) const override;
 	static unique_ptr<LogicalOperator> Deserialize(LogicalDeserializationState &state, FieldReader &reader);
+	idx_t EstimateCardinality(ClientContext &context) override;
 
 protected:
 	void ResolveTypes() override {

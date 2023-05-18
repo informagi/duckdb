@@ -9,7 +9,7 @@ bool SQLLogicParser::OpenFile(const string &path) {
 	this->file_name = path;
 
 	std::ifstream infile(file_name);
-	if (infile.bad()) {
+	if (infile.bad() || infile.fail()) {
 		return false;
 	}
 
@@ -53,12 +53,12 @@ void SQLLogicParser::NextLine() {
 	current_line++;
 }
 
-string SQLLogicParser::ExtractStatement(bool is_query) {
+string SQLLogicParser::ExtractStatement() {
 	string statement;
 
 	bool first_line = true;
 	while (current_line < lines.size() && !EmptyOrComment(lines[current_line])) {
-		if (is_query && lines[current_line] == "----") {
+		if (lines[current_line] == "----") {
 			break;
 		}
 		if (!first_line) {
@@ -85,6 +85,25 @@ vector<string> SQLLogicParser::ExtractExpectedResult() {
 		current_line++;
 	}
 	return result;
+}
+
+string SQLLogicParser::ExtractExpectedError(bool expect_ok) {
+	// check if there is an expected error at all
+	if (current_line >= lines.size() || lines[current_line] != "----") {
+		return string();
+	}
+	if (expect_ok) {
+		Fail("Failed to parse statement: only statement error can have an expected error message, not statement ok");
+	}
+	current_line++;
+	string error;
+	vector<string> error_lines;
+	while (current_line < lines.size() && !lines[current_line].empty()) {
+		error_lines.push_back(lines[current_line]);
+		current_line++;
+	}
+	error = StringUtil::Join(error_lines, "\n");
+	return error;
 }
 
 void SQLLogicParser::FailRecursive(const string &msg, vector<ExceptionFormatValue> &values) {
@@ -121,7 +140,7 @@ SQLLogicToken SQLLogicParser::Tokenize() {
 	}
 	result.type = CommandToToken(argument_list[0]);
 	for (idx_t i = 1; i < argument_list.size(); i++) {
-		result.parameters.push_back(move(argument_list[i]));
+		result.parameters.push_back(std::move(argument_list[i]));
 	}
 	return result;
 }
@@ -142,6 +161,7 @@ bool SQLLogicParser::IsSingleLineStatement(SQLLogicToken &token) {
 	case SQLLogicTokenType::SQLLOGIC_REQUIRE_ENV:
 	case SQLLogicTokenType::SQLLOGIC_LOAD:
 	case SQLLogicTokenType::SQLLOGIC_RESTART:
+	case SQLLogicTokenType::SQLLOGIC_RECONNECT:
 		return true;
 
 	case SQLLogicTokenType::SQLLOGIC_SKIP_IF:
@@ -191,6 +211,8 @@ SQLLogicTokenType SQLLogicParser::CommandToToken(const string &token) {
 		return SQLLogicTokenType::SQLLOGIC_LOAD;
 	} else if (token == "restart") {
 		return SQLLogicTokenType::SQLLOGIC_RESTART;
+	} else if (token == "reconnect") {
+		return SQLLogicTokenType::SQLLOGIC_RECONNECT;
 	}
 	Fail("Unrecognized parameter %s", token);
 	return SQLLogicTokenType::SQLLOGIC_INVALID;

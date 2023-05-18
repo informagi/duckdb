@@ -1,120 +1,391 @@
 #include "duckdb/execution/index/art/leaf.hpp"
 
+#include "duckdb/execution/index/art/art.hpp"
+#include "duckdb/execution/index/art/art_key.hpp"
+#include "duckdb/execution/index/art/leaf_segment.hpp"
 #include "duckdb/execution/index/art/node.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
 #include "duckdb/storage/meta_block_reader.hpp"
-#include <cstring>
+#include "duckdb/storage/meta_block_writer.hpp"
 
 namespace duckdb {
 
-Leaf::Leaf(Key &value, uint32_t depth, row_t row_id) : Node(NodeType::NLeaf) {
-	capacity = 1;
-	row_ids = unique_ptr<row_t[]>(new row_t[capacity]);
-	row_ids[0] = row_id;
-	count = 1;
-	D_ASSERT(value.len >= depth);
-	prefix = Prefix(value, depth, value.len - depth);
+Leaf &Leaf::New(ART &art, Node &node, const ARTKey &key, const uint32_t depth, const row_t row_id) {
+
+	node.SetPtr(Node::GetAllocator(art, NType::LEAF).New());
+	node.type = (uint8_t)NType::LEAF;
+	auto &leaf = Leaf::Get(art, node);
+
+	// set the fields of the leaf
+	leaf.count = 1;
+	leaf.row_ids.inlined = row_id;
+
+	// initialize the prefix
+	D_ASSERT(key.len >= depth);
+	leaf.prefix.Initialize(art, key, depth, key.len - depth);
+
+	return leaf;
 }
 
-Leaf::Leaf(Key &value, uint32_t depth, unique_ptr<row_t[]> row_ids_p, idx_t num_elements_p) : Node(NodeType::NLeaf) {
-	capacity = num_elements_p;
-	row_ids = move(row_ids_p);
-	count = num_elements_p;
-	D_ASSERT(value.len >= depth);
-	prefix = Prefix(value, depth, value.len - depth);
-}
+Leaf &Leaf::New(ART &art, Node &node, const ARTKey &key, const uint32_t depth, const row_t *row_ids,
+                const idx_t count) {
 
-Leaf::Leaf(unique_ptr<row_t[]> row_ids_p, idx_t num_elements_p, Prefix &prefix_p) : Node(NodeType::NLeaf) {
-	capacity = num_elements_p;
-	row_ids = move(row_ids_p);
-	count = num_elements_p;
-	prefix = prefix_p;
-}
-
-void Leaf::Insert(row_t row_id) {
-
-	// Grow array
-	if (count == capacity) {
-		auto new_row_id = unique_ptr<row_t[]>(new row_t[capacity * 2]);
-		memcpy(new_row_id.get(), row_ids.get(), capacity * sizeof(row_t));
-		capacity *= 2;
-		row_ids = move(new_row_id);
+	// inlined leaf
+	D_ASSERT(count >= 1);
+	if (count == 1) {
+		return Leaf::New(art, node, key, depth, row_ids[0]);
 	}
-	row_ids[count++] = row_id;
+
+	node.SetPtr(Node::GetAllocator(art, NType::LEAF).New());
+	node.type = (uint8_t)NType::LEAF;
+	auto &leaf = Leaf::Get(art, node);
+
+	// set the fields of the leaf
+	leaf.count = 0;
+
+	// copy the row IDs
+	reference<LeafSegment> segment(LeafSegment::New(art, leaf.row_ids.ptr));
+	for (idx_t i = 0; i < count; i++) {
+		segment = segment.get().Append(art, leaf.count, row_ids[i]);
+	}
+
+	// set the prefix
+	D_ASSERT(key.len >= depth);
+	leaf.prefix.Initialize(art, key, depth, key.len - depth);
+
+	return leaf;
 }
 
-void Leaf::Remove(row_t row_id) {
-	idx_t entry_offset = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < count; i++) {
-		if (row_ids[i] == row_id) {
-			entry_offset = i;
-			break;
+void Leaf::Free(ART &art, Node &node) {
+
+	D_ASSERT(node.IsSet());
+	D_ASSERT(!node.IsSwizzled());
+
+	auto &leaf = Leaf::Get(art, node);
+
+	// delete all leaf segments
+	if (!leaf.IsInlined()) {
+		auto ptr = leaf.row_ids.ptr;
+		while (ptr.IsSet()) {
+			auto next_ptr = LeafSegment::Get(art, ptr).next;
+			Node::Free(art, ptr);
+			ptr = next_ptr;
 		}
 	}
-	if (entry_offset == DConstants::INVALID_INDEX) {
+}
+
+void Leaf::InitializeMerge(const ART &art, const idx_t buffer_count) {
+
+	if (IsInlined()) {
 		return;
 	}
+
+	reference<LeafSegment> segment(LeafSegment::Get(art, row_ids.ptr));
+	row_ids.ptr.buffer_id += buffer_count;
+
+	auto ptr = segment.get().next;
+	while (ptr.IsSet()) {
+		segment.get().next.buffer_id += buffer_count;
+		segment = LeafSegment::Get(art, ptr);
+		ptr = segment.get().next;
+	}
+}
+
+void Leaf::Merge(ART &art, Node &other) {
+
+	auto &other_leaf = Leaf::Get(art, other);
+
+	// copy inlined row ID
+	if (other_leaf.IsInlined()) {
+		Insert(art, other_leaf.row_ids.inlined);
+		Node::Free(art, other);
+		return;
+	}
+
+	// row ID was inlined, move to a new segment
+	if (IsInlined()) {
+		auto row_id = row_ids.inlined;
+		auto &segment = LeafSegment::New(art, row_ids.ptr);
+		segment.row_ids[0] = row_id;
+	}
+
+	// get the first segment to copy to
+	reference<LeafSegment> segment(LeafSegment::Get(art, row_ids.ptr).GetTail(art));
+
+	// initialize loop variables
+	auto other_ptr = other_leaf.row_ids.ptr;
+	auto remaining = other_leaf.count;
+
+	// copy row IDs
+	while (other_ptr.IsSet()) {
+		auto &other_segment = LeafSegment::Get(art, other_ptr);
+		auto copy_count = MinValue(Node::LEAF_SEGMENT_SIZE, remaining);
+
+		// copy the data
+		for (idx_t i = 0; i < copy_count; i++) {
+			segment = segment.get().Append(art, count, other_segment.row_ids[i]);
+		}
+
+		// adjust the loop variables
+		other_ptr = other_segment.next;
+		remaining -= copy_count;
+	}
+	D_ASSERT(remaining == 0);
+
+	Node::Free(art, other);
+}
+
+void Leaf::Insert(ART &art, const row_t row_id) {
+
+	if (count == 0) {
+		row_ids.inlined = row_id;
+		count++;
+		return;
+	}
+
+	if (count == 1) {
+		MoveInlinedToSegment(art);
+	}
+
+	// append to the tail
+	auto &first_segment = LeafSegment::Get(art, row_ids.ptr);
+	auto &tail = first_segment.GetTail(art);
+	tail.Append(art, count, row_id);
+}
+
+void Leaf::Remove(ART &art, const row_t row_id) {
+
+	if (count == 0) {
+		return;
+	}
+
+	if (IsInlined()) {
+		if (row_ids.inlined == row_id) {
+			count--;
+		}
+		return;
+	}
+
+	// possibly inline the row ID
+	if (count == 2) {
+		auto &segment = LeafSegment::Get(art, row_ids.ptr);
+		if (segment.row_ids[0] != row_id && segment.row_ids[1] != row_id) {
+			return;
+		}
+
+		auto remaining_row_id = segment.row_ids[0] == row_id ? segment.row_ids[1] : segment.row_ids[0];
+		Node::Free(art, row_ids.ptr);
+		row_ids.inlined = remaining_row_id;
+		count--;
+		return;
+	}
+
+	// find the row ID, and the segment containing that row ID (stored in ptr)
+	auto ptr = row_ids.ptr;
+	auto copy_idx = FindRowId(art, ptr, row_id);
+	if (copy_idx == (uint32_t)DConstants::INVALID_INDEX) {
+		return;
+	}
+	copy_idx++;
+
+	// iterate all remaining segments and move the row IDs one field to the left
+	reference<LeafSegment> segment(LeafSegment::Get(art, ptr));
+	reference<LeafSegment> prev_segment(LeafSegment::Get(art, ptr));
+	while (copy_idx < count) {
+
+		auto copy_start = copy_idx % Node::LEAF_SEGMENT_SIZE;
+		D_ASSERT(copy_start != 0);
+		auto copy_end = MinValue(copy_start + count - copy_idx, Node::LEAF_SEGMENT_SIZE);
+
+		// copy row IDs
+		for (idx_t i = copy_start; i < copy_end; i++) {
+			segment.get().row_ids[i - 1] = segment.get().row_ids[i];
+			copy_idx++;
+		}
+
+		// adjust loop variables
+		if (segment.get().next.IsSet()) {
+			prev_segment = segment;
+			segment = LeafSegment::Get(art, segment.get().next);
+			// this segment has at least one element, and we need to copy it into the previous segment
+			prev_segment.get().row_ids[Node::LEAF_SEGMENT_SIZE - 1] = segment.get().row_ids[0];
+			copy_idx++;
+		}
+	}
+
+	// this evaluates to true, if we need to delete the last segment
+	if (count % Node::LEAF_SEGMENT_SIZE == 1) {
+		ptr = row_ids.ptr;
+		while (ptr.IsSet()) {
+
+			// get the segment succeeding the current segment
+			auto &current_segment = LeafSegment::Get(art, ptr);
+			D_ASSERT(current_segment.next.IsSet());
+			auto &next_segment = LeafSegment::Get(art, current_segment.next);
+
+			// next_segment is the tail of the segment list
+			if (!next_segment.next.IsSet()) {
+				Node::Free(art, current_segment.next);
+			}
+
+			// adjust loop variables
+			ptr = current_segment.next;
+		}
+	}
 	count--;
-	if (capacity > 2 && count < capacity / 2) {
-		// Shrink array, if less than half full
-		auto new_row_id = unique_ptr<row_t[]>(new row_t[capacity / 2]);
-		memcpy(new_row_id.get(), row_ids.get(), entry_offset * sizeof(row_t));
-		memcpy(new_row_id.get() + entry_offset, row_ids.get() + entry_offset + 1,
-		       (count - entry_offset) * sizeof(row_t));
-		capacity /= 2;
-		row_ids = move(new_row_id);
-	} else {
-		// Copy the rest
-		memmove(row_ids.get() + entry_offset, row_ids.get() + entry_offset + 1, (count - entry_offset) * sizeof(row_t));
+}
+
+row_t Leaf::GetRowId(const ART &art, const idx_t position) const {
+
+	D_ASSERT(position < count);
+	if (IsInlined()) {
+		return row_ids.inlined;
+	}
+
+	// get the correct segment
+	reference<LeafSegment> segment(LeafSegment::Get(art, row_ids.ptr));
+	for (idx_t i = 0; i < position / Node::LEAF_SEGMENT_SIZE; i++) {
+		D_ASSERT(segment.get().next.IsSet());
+		segment = LeafSegment::Get(art, segment.get().next);
+	}
+
+	return segment.get().row_ids[position % Node::LEAF_SEGMENT_SIZE];
+}
+
+uint32_t Leaf::FindRowId(const ART &art, Node &ptr, const row_t row_id) const {
+
+	D_ASSERT(!IsInlined());
+
+	auto remaining = count;
+	while (ptr.IsSet()) {
+
+		auto &segment = LeafSegment::Get(art, ptr);
+		auto search_count = MinValue(Node::LEAF_SEGMENT_SIZE, remaining);
+
+		// search in this segment
+		for (idx_t i = 0; i < search_count; i++) {
+			if (segment.row_ids[i] == row_id) {
+				return count - remaining + i;
+			}
+		}
+
+		// adjust loop variables
+		remaining -= search_count;
+		ptr = segment.next;
+	}
+	return (uint32_t)DConstants::INVALID_INDEX;
+}
+
+string Leaf::ToString(const ART &art) const {
+
+	if (IsInlined()) {
+		return "Leaf (" + to_string(count) + "): [" + to_string(row_ids.inlined) + "]";
+	}
+
+	auto ptr = row_ids.ptr;
+	auto remaining = count;
+	string str = "";
+	uint32_t this_count = 0;
+	while (ptr.IsSet()) {
+		auto &segment = LeafSegment::Get(art, ptr);
+		auto to_string_count = Node::LEAF_SEGMENT_SIZE < remaining ? Node::LEAF_SEGMENT_SIZE : remaining;
+
+		for (idx_t i = 0; i < to_string_count; i++) {
+			str += ", " + to_string(segment.row_ids[i]);
+			this_count++;
+		}
+		remaining -= to_string_count;
+		ptr = segment.next;
+	}
+	return "Leaf (" + to_string(this_count) + ", " + to_string(count) + "): [" + str + "] \n";
+}
+
+BlockPointer Leaf::Serialize(const ART &art, MetaBlockWriter &writer) const {
+
+	// get pointer and write fields
+	auto block_pointer = writer.GetBlockPointer();
+	writer.Write(NType::LEAF);
+	writer.Write<uint32_t>(count);
+	prefix.Serialize(art, writer);
+
+	if (IsInlined()) {
+		writer.Write(row_ids.inlined);
+		return block_pointer;
+	}
+
+	D_ASSERT(row_ids.ptr.IsSet());
+	auto ptr = row_ids.ptr;
+	auto remaining = count;
+
+	// iterate all leaf segments and write their row IDs
+	while (ptr.IsSet()) {
+		auto &segment = LeafSegment::Get(art, ptr);
+		auto write_count = MinValue(Node::LEAF_SEGMENT_SIZE, remaining);
+
+		// write the row IDs
+		for (idx_t i = 0; i < write_count; i++) {
+			writer.Write(segment.row_ids[i]);
+		}
+
+		// adjust loop variables
+		remaining -= write_count;
+		ptr = segment.next;
+	}
+	D_ASSERT(remaining == 0);
+
+	return block_pointer;
+}
+
+void Leaf::Deserialize(ART &art, MetaBlockReader &reader) {
+
+	auto count_p = reader.Read<uint32_t>();
+	prefix.Deserialize(art, reader);
+
+	// inlined
+	if (count_p == 1) {
+		row_ids.inlined = reader.Read<row_t>();
+		count = count_p;
+		return;
+	}
+
+	// copy into segments
+	count = 0;
+	reference<LeafSegment> segment(LeafSegment::New(art, row_ids.ptr));
+	for (idx_t i = 0; i < count_p; i++) {
+		segment = segment.get().Append(art, count, reader.Read<row_t>());
+	}
+	D_ASSERT(count_p == count);
+}
+
+void Leaf::Vacuum(ART &art) {
+
+	if (IsInlined()) {
+		return;
+	}
+
+	// first pointer has special treatment because we don't obtain it from a leaf segment
+	auto &allocator = Node::GetAllocator(art, NType::LEAF_SEGMENT);
+	if (allocator.NeedsVacuum(row_ids.ptr)) {
+		row_ids.ptr.SetPtr(allocator.VacuumPointer(row_ids.ptr));
+	}
+
+	auto ptr = row_ids.ptr;
+	while (ptr.IsSet()) {
+		auto &segment = LeafSegment::Get(art, ptr);
+		ptr = segment.next;
+		if (ptr.IsSet() && allocator.NeedsVacuum(ptr)) {
+			segment.next.SetPtr(allocator.VacuumPointer(ptr));
+			ptr = segment.next;
+		}
 	}
 }
 
-string Leaf::ToString(Node *node) {
+void Leaf::MoveInlinedToSegment(ART &art) {
 
-	Leaf *leaf = (Leaf *)node;
-	string str = "Leaf: [";
-	for (idx_t i = 0; i < leaf->count; i++) {
-		str += i == 0 ? to_string(leaf->row_ids[i]) : ", " + to_string(leaf->row_ids[i]);
-	}
-	return str + "]";
-}
+	D_ASSERT(IsInlined());
 
-void Leaf::Merge(Node *&l_node, Node *&r_node) {
-
-	Leaf *l_n = (Leaf *)l_node;
-	Leaf *r_n = (Leaf *)r_node;
-
-	// append non-duplicate row_ids to l_n
-	for (idx_t i = 0; i < r_n->count; i++) {
-		l_n->Insert(r_n->GetRowId(i));
-	}
-}
-
-BlockPointer Leaf::Serialize(duckdb::MetaBlockWriter &writer) {
-	auto ptr = writer.GetBlockPointer();
-	// Write Node Type
-	writer.Write(type);
-	// Write compression Info
-	prefix.Serialize(writer);
-	// Write Row Ids
-	// Length
-	writer.Write(count);
-	// Actual Row Ids
-	for (idx_t i = 0; i < count; i++) {
-		writer.Write(row_ids[i]);
-	}
-	return ptr;
-}
-
-Leaf *Leaf::Deserialize(MetaBlockReader &reader) {
-	Prefix prefix;
-	prefix.Deserialize(reader);
-	auto num_elements = reader.Read<uint16_t>();
-	auto elements = unique_ptr<row_t[]>(new row_t[num_elements]);
-	for (idx_t i = 0; i < num_elements; i++) {
-		elements[i] = reader.Read<row_t>();
-	}
-	return new Leaf(move(elements), num_elements, prefix);
+	auto row_id = row_ids.inlined;
+	auto &segment = LeafSegment::New(art, row_ids.ptr);
+	segment.row_ids[0] = row_id;
 }
 
 } // namespace duckdb

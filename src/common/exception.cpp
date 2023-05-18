@@ -58,7 +58,24 @@ string Exception::GetStackTrace(int max_depth) {
 #endif
 }
 
-string Exception::ConstructMessageRecursive(const string &msg, vector<ExceptionFormatValue> &values) {
+string Exception::ConstructMessageRecursive(const string &msg, std::vector<ExceptionFormatValue> &values) {
+#ifdef DEBUG
+	// Verify that we have the required amount of values for the message
+	idx_t parameter_count = 0;
+	for (idx_t i = 0; i < msg.size(); i++) {
+		if (msg[i] != '%') {
+			continue;
+		}
+		if (i < msg.size() && msg[i + 1] == '%') {
+			i++;
+			continue;
+		}
+		parameter_count++;
+	}
+	if (parameter_count != values.size()) {
+		throw InternalException("Expected %d parameters, received %d", parameter_count, values.size());
+	}
+#endif
 	return ExceptionFormatValue::Format(msg, values);
 }
 
@@ -136,12 +153,25 @@ string Exception::ExceptionTypeToString(ExceptionType type) {
 		return "Parameter Not Resolved";
 	case ExceptionType::PARAMETER_NOT_ALLOWED:
 		return "Parameter Not Allowed";
+	case ExceptionType::DEPENDENCY:
+		return "Dependency";
+	case ExceptionType::HTTP:
+		return "HTTP";
 	default:
 		return "Unknown";
 	}
 }
 
-void Exception::ThrowAsTypeWithMessage(ExceptionType type, const string &message) {
+const HTTPException &Exception::AsHTTPException() const {
+	D_ASSERT(type == ExceptionType::HTTP);
+	const auto &e = static_cast<const HTTPException *>(this);
+	D_ASSERT(e->GetStatusCode() != 0);
+	D_ASSERT(e->GetHeaders().size() > 0);
+	return *e;
+}
+
+void Exception::ThrowAsTypeWithMessage(ExceptionType type, const string &message,
+                                       const std::shared_ptr<Exception> &original) {
 	switch (type) {
 	case ExceptionType::OUT_OF_RANGE:
 		throw OutOfRangeException(message);
@@ -187,6 +217,11 @@ void Exception::ThrowAsTypeWithMessage(ExceptionType type, const string &message
 		throw ParameterNotResolvedException();
 	case ExceptionType::FATAL:
 		throw FatalException(message);
+	case ExceptionType::DEPENDENCY:
+		throw DependencyException(message);
+	case ExceptionType::HTTP: {
+		original->AsHTTPException().Throw();
+	}
 	default:
 		throw Exception(type, message);
 	}
@@ -296,10 +331,17 @@ SyntaxException::SyntaxException(const string &msg) : Exception(ExceptionType::S
 ConstraintException::ConstraintException(const string &msg) : Exception(ExceptionType::CONSTRAINT, msg) {
 }
 
+DependencyException::DependencyException(const string &msg) : Exception(ExceptionType::DEPENDENCY, msg) {
+}
+
 BinderException::BinderException(const string &msg) : StandardException(ExceptionType::BINDER, msg) {
 }
 
 IOException::IOException(const string &msg) : Exception(ExceptionType::IO, msg) {
+}
+
+MissingExtensionException::MissingExtensionException(const string &msg)
+    : Exception(ExceptionType::MISSING_EXTENSION, msg) {
 }
 
 SerializationException::SerializationException(const string &msg) : Exception(ExceptionType::SERIALIZATION, msg) {

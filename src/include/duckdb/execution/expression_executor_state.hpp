@@ -29,12 +29,16 @@ struct ExpressionState {
 	vector<unique_ptr<ExpressionState>> child_states;
 	vector<LogicalType> types;
 	DataChunk intermediate_chunk;
-	string name;
 	CycleCounter profiler;
 
 public:
 	void AddChild(Expression *expr);
 	void Finalize();
+	Allocator &GetAllocator();
+	bool HasContext();
+	DUCKDB_API ClientContext &GetContext();
+
+	void Verify(ExpressionExecutorState &root);
 };
 
 struct ExecuteFunctionState : public ExpressionState {
@@ -50,11 +54,13 @@ public:
 };
 
 struct ExpressionExecutorState {
-	explicit ExpressionExecutorState(const string &name);
+	ExpressionExecutorState();
+
 	unique_ptr<ExpressionState> root_state;
-	ExpressionExecutor *executor;
+	ExpressionExecutor *executor = nullptr;
 	CycleCounter profiler;
-	string name;
+
+	void Verify();
 };
 
 } // namespace duckdb

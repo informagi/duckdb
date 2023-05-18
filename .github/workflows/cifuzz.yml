@@ -1,8 +1,19 @@
 name: CIFuzz
 on:
+  workflow_dispatch:
+  repository_dispatch:
   push:
+    branches:
+      - '**'
+      - '!master'
+      - '!feature'
+    tags:
+      - '**'
     paths-ignore:
       - '**.md'
+      - 'tools/**'
+      - '.github/workflows/**'
+      - '!.github/workflows/cifuzz.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/master' || github.sha }}
@@ -42,6 +53,7 @@ jobs:
       BUILD_TPCH: 1
       BUILD_TPCDS: 1
       BUILD_PARQUET: 1
+      BUILD_JEMALLOC: 1
       GEN: ninja
       FUZZEROFDUCKSKEY: ${{ secrets.FUZZEROFDUCKSKEY }}
 
@@ -71,6 +83,7 @@ jobs:
     env:
       BUILD_SQLSMITH: 1
       BUILD_JDBC: 1
+      BUILD_JEMALLOC: 1
       GEN: ninja
       FUZZEROFDUCKSKEY: ${{ secrets.FUZZEROFDUCKSKEY }}
 
@@ -83,7 +96,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
@@ -99,6 +112,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@main
         with:
           key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/master' || github.repository != 'duckdb/duckdb' }}
 
       - name: Build JDBC Driver
         shell: bash

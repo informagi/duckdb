@@ -22,7 +22,7 @@ class PhysicalRangeJoin : public PhysicalComparisonJoin {
 public:
 	class LocalSortedTable {
 	public:
-		LocalSortedTable(Allocator &allocator, const PhysicalRangeJoin &op, const idx_t child);
+		LocalSortedTable(ClientContext &context, const PhysicalRangeJoin &op, const idx_t child);
 
 		void Sink(DataChunk &input, GlobalSortState &global_sort_state);
 
@@ -83,7 +83,7 @@ public:
 		//! The total number of rows in the RHS
 		atomic<idx_t> count;
 		//! A bool indicating for each tuple in the RHS if they found a match (only used in FULL OUTER JOIN)
-		unique_ptr<bool[]> found_match;
+		unsafe_unique_array<bool> found_match;
 		//! Memory usage per thread
 		idx_t memory_per_thread;
 	};

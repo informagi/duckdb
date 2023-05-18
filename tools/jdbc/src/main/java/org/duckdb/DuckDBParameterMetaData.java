@@ -13,12 +13,12 @@ public class DuckDBParameterMetaData implements ParameterMetaData {
 
 	@Override
 	public <T> T unwrap(Class<T> iface) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		return JdbcUtils.unwrap(this, iface);
 	}
 
 	@Override
-	public boolean isWrapperFor(Class<?> iface) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+	public boolean isWrapperFor(Class<?> iface) {
+		return iface.isInstance(this);
 	}
 
 	@Override
@@ -38,12 +38,12 @@ public class DuckDBParameterMetaData implements ParameterMetaData {
 
 	@Override
 	public int getPrecision(int param) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException("getPrecision");
 	}
 
 	@Override
 	public int getScale(int param) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException("getScale");
 	}
 
 	@Override

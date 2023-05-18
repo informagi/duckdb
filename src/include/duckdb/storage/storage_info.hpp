@@ -28,6 +28,8 @@ struct FileHandle;
 //! The version number of the database storage format
 extern const uint64_t VERSION_NUMBER;
 
+const char *GetDuckDBVersion(idx_t version_number);
+
 using block_id_t = int64_t;
 
 #define INVALID_BLOCK (-1)
@@ -39,7 +41,7 @@ using block_id_t = int64_t;
 //! file.
 struct MainHeader {
 	static constexpr idx_t MAGIC_BYTE_SIZE = 4;
-	static constexpr idx_t MAGIC_BYTE_OFFSET = sizeof(uint64_t);
+	static constexpr idx_t MAGIC_BYTE_OFFSET = Storage::BLOCK_HEADER_SIZE;
 	static constexpr idx_t FLAG_COUNT = 4;
 	// the magic bytes in front of the file
 	// should be "DUCK"

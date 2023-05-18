@@ -17,13 +17,14 @@
 #include "duckdb/function/compression_function.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
-#include "duckdb/storage/statistics/numeric_statistics.hpp"
+
 #include "duckdb/storage/table/column_data_checkpointer.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 
 #include "duckdb/storage/compression/chimp/algorithm/flag_buffer.hpp"
 #include "duckdb/storage/compression/chimp/algorithm/leading_zero_buffer.hpp"
+#include "duckdb/storage/table/scan_state.hpp"
 
 namespace duckdb {
 
@@ -95,6 +96,11 @@ public:
 	void LoadPackedData(uint16_t *packed_data, idx_t packed_data_block_count) {
 		for (idx_t i = 0; i < packed_data_block_count; i++) {
 			PackedDataUtils<CHIMP_TYPE>::Unpack(packed_data[i], unpacked_data_blocks[i]);
+			if (unpacked_data_blocks[i].significant_bits == 0) {
+				unpacked_data_blocks[i].significant_bits = 64;
+			}
+			unpacked_data_blocks[i].leading_zero =
+			    ChimpConstants::Decompression::LEADING_REPRESENTATION[unpacked_data_blocks[i].leading_zero];
 		}
 		unpacked_index = 0;
 		max_packed_data_to_read = packed_data_block_count;
@@ -246,7 +252,7 @@ public:
 
 template <class T>
 unique_ptr<SegmentScanState> ChimpInitScan(ColumnSegment &segment) {
-	auto result = make_unique_base<SegmentScanState, ChimpScanState<T>>(segment);
+	auto result = make_uniq_base<SegmentScanState, ChimpScanState<T>>(segment);
 	return result;
 }
 

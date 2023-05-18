@@ -2,7 +2,7 @@ skip_on_cran()
 `%>%` <- dplyr::`%>%`
 
 test_that("Parquet files can be registered with dplyr::tbl()", {
-  con <- DBI::dbConnect(duckdb::duckdb())
+  con <- DBI::dbConnect(duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   tab0 <- dplyr::tbl(con, "data/userdata1.parquet")
@@ -24,7 +24,7 @@ test_that("Parquet files can be registered with dplyr::tbl()", {
 
 
 test_that("Object cache can be enabled for parquet files with dplyr::tbl()", {
-  con <- DBI::dbConnect(duckdb::duckdb())
+  con <- DBI::dbConnect(duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "SET enable_object_cache=False;")
@@ -42,7 +42,7 @@ test_that("CSV files can be registered with dplyr::tbl()", {
   write.csv(iris, file = path)
   on.exit(unlink(path))
 
-  con <- DBI::dbConnect(duckdb::duckdb())
+  con <- DBI::dbConnect(duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
   tab1 <- dplyr::tbl(con, path)
@@ -55,12 +55,21 @@ test_that("CSV files can be registered with dplyr::tbl()", {
 })
 
 test_that("Other replacement scans or functions can be registered with dplyr::tbl()", {
-  con <- DBI::dbConnect(duckdb::duckdb())
+  con <- DBI::dbConnect(duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   obj <- dplyr::tbl(con, "duckdb_keywords()")
   expect_true(inherits(obj, "tbl_duckdb_connection"))
   expect_true(obj %>% dplyr::filter(keyword_name == "all") %>% dplyr::count() %>% dplyr::collect() == 1)
+})
+
+test_that("Strings tagged as SQL will be handled correctly with dplyr::tbl()", {
+  con <- DBI::dbConnect(duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  
+  rs <- dplyr::tbl(con, dplyr::sql("SELECT 1"))
+  expect_true(inherits(rs, "tbl_duckdb_connection"))
+  expect_true(rs %>% dplyr::collect() == 1)
 })
 
 rm(`%>%`)

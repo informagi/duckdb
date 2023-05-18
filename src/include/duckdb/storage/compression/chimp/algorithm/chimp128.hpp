@@ -17,6 +17,7 @@
 #include "duckdb/common/likely.hpp"
 #include "duckdb/storage/compression/chimp/algorithm/packed_data.hpp"
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/bit_utils.hpp"
 
 #include "duckdb/storage/compression/chimp/algorithm/bit_reader.hpp"
 #include "duckdb/storage/compression/chimp/algorithm/output_bit_stream.hpp"
@@ -148,7 +149,9 @@ public:
 			if (trailing_zeros_exceed_threshold) {
 				state.flag_buffer.Insert(ChimpConstants::Flags::TRAILING_EXCEEDS_THRESHOLD);
 				uint32_t significant_bits = BIT_SIZE - leading_zeros - trailing_zeros;
-				auto result = PackedDataUtils<CHIMP_TYPE>::Pack(reference_index, leading_zeros, significant_bits);
+				auto result = PackedDataUtils<CHIMP_TYPE>::Pack(
+				    reference_index, ChimpConstants::Compression::LEADING_REPRESENTATION[leading_zeros],
+				    significant_bits);
 				state.packed_data_buffer.Insert(result & 0xFFFF);
 				state.output.template WriteValue<CHIMP_TYPE>(xor_result >> trailing_zeros, significant_bits);
 				state.SetLeadingZeros();

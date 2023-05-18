@@ -16,9 +16,16 @@
 namespace duckdb {
 class BufferedSerializer;
 
+struct IndexWriteOperation {
+	template <class SRC, class DST>
+	static DST Operation(SRC input) {
+		return input.index;
+	}
+};
+
 class FieldWriter {
 public:
-	DUCKDB_API FieldWriter(Serializer &serializer);
+	DUCKDB_API explicit FieldWriter(Serializer &serializer);
 	DUCKDB_API ~FieldWriter();
 
 public:
@@ -55,6 +62,20 @@ public:
 		for (auto &element : elements) {
 			Write<T>(element);
 		}
+	}
+
+	template <class T, class SRC, class OP, class CONTAINER_TYPE = vector<SRC>>
+	void WriteGenericList(const CONTAINER_TYPE &elements) {
+		AddField();
+		Write<uint32_t>(elements.size());
+		for (auto &element : elements) {
+			Write<T>(OP::template Operation<SRC, T>(element));
+		}
+	}
+
+	template <class T>
+	void WriteIndexList(const vector<T> &elements) {
+		WriteGenericList<idx_t, T, IndexWriteOperation>(elements);
 	}
 
 	// vector<bool> yay
@@ -107,11 +128,11 @@ public:
 		return *buffer;
 	}
 
-private:
 	void AddField() {
 		field_count++;
 	}
 
+private:
 	template <class T>
 	void Write(const T &element) {
 		WriteData((const_data_ptr_t)&element, sizeof(T));
@@ -131,7 +152,7 @@ DUCKDB_API void FieldWriter::Write(const string &val);
 
 class FieldDeserializer : public Deserializer {
 public:
-	FieldDeserializer(Deserializer &root);
+	explicit FieldDeserializer(Deserializer &root);
 
 public:
 	void ReadData(data_ptr_t buffer, idx_t read_size) override;
@@ -142,14 +163,29 @@ public:
 		return root;
 	}
 
+	ClientContext &GetContext() override {
+		return root.GetContext();
+	}
+
+	optional_ptr<Catalog> GetCatalog() override {
+		return root.GetCatalog();
+	}
+
 private:
 	Deserializer &root;
 	idx_t remaining_data;
 };
 
+struct IndexReadOperation {
+	template <class SRC, class DST>
+	static DST Operation(SRC input) {
+		return DST(input);
+	}
+};
+
 class FieldReader {
 public:
-	DUCKDB_API FieldReader(Deserializer &source);
+	DUCKDB_API explicit FieldReader(Deserializer &source);
 	DUCKDB_API ~FieldReader();
 
 public:
@@ -175,8 +211,39 @@ public:
 		return source.Read<T>();
 	}
 
-	template <class T>
-	vector<T> ReadRequiredList() {
+	template <class T, class CONTAINER_TYPE = vector<T>>
+	bool ReadList(CONTAINER_TYPE &result) {
+		if (field_count >= max_field_count) {
+			// field is not there, return false and leave the result empty
+			return false;
+		}
+		AddField();
+		auto result_count = source.Read<uint32_t>();
+		result.reserve(result_count);
+		for (idx_t i = 0; i < result_count; i++) {
+			result.push_back(source.Read<T>());
+		}
+		return true;
+	}
+
+	template <class T, class CONTAINER_TYPE = vector<T>>
+	CONTAINER_TYPE ReadRequiredList() {
+		if (field_count >= max_field_count) {
+			// field is not there, throw an exception
+			throw SerializationException("Attempting to read a required field, but field is missing");
+		}
+		AddField();
+		auto result_count = source.Read<uint32_t>();
+		CONTAINER_TYPE result;
+		result.reserve(result_count);
+		for (idx_t i = 0; i < result_count; i++) {
+			result.push_back(source.Read<T>());
+		}
+		return result;
+	}
+
+	template <class T, class SRC, class OP>
+	vector<T> ReadRequiredGenericList() {
 		if (field_count >= max_field_count) {
 			// field is not there, throw an exception
 			throw SerializationException("Attempting to read a required field, but field is missing");
@@ -186,20 +253,25 @@ public:
 		vector<T> result;
 		result.reserve(result_count);
 		for (idx_t i = 0; i < result_count; i++) {
-			result.push_back(source.Read<T>());
+			result.push_back(OP::template Operation<SRC, T>(source.Read<SRC>()));
 		}
 		return result;
 	}
 
 	template <class T>
-	set<T> ReadRequiredSet() {
+	vector<T> ReadRequiredIndexList() {
+		return ReadRequiredGenericList<T, idx_t, IndexReadOperation>();
+	}
+
+	template <class T, class CONTAINER_TYPE = set<T>>
+	CONTAINER_TYPE ReadRequiredSet() {
 		if (field_count >= max_field_count) {
 			// field is not there, throw an exception
 			throw SerializationException("Attempting to read a required field, but field is missing");
 		}
 		AddField();
 		auto result_count = source.Read<uint32_t>();
-		set<T> result;
+		CONTAINER_TYPE result;
 		for (idx_t i = 0; i < result_count; i++) {
 			result.insert(source.Read<T>());
 		}
@@ -207,7 +279,7 @@ public:
 	}
 
 	template <class T, typename... ARGS>
-	unique_ptr<T> ReadOptional(unique_ptr<T> default_value, ARGS &&...args) {
+	unique_ptr<T> ReadOptional(unique_ptr<T> default_value, ARGS &&... args) {
 		if (field_count >= max_field_count) {
 			// field is not there, read the default value
 			return default_value;
@@ -229,7 +301,7 @@ public:
 	}
 
 	template <class T, class RETURN_TYPE = unique_ptr<T>, typename... ARGS>
-	RETURN_TYPE ReadSerializable(RETURN_TYPE default_value, ARGS &&...args) {
+	RETURN_TYPE ReadSerializable(RETURN_TYPE default_value, ARGS &&... args) {
 		if (field_count >= max_field_count) {
 			// field is not there, read the default value
 			return default_value;
@@ -251,7 +323,7 @@ public:
 	}
 
 	template <class T, class RETURN_TYPE = unique_ptr<T>, typename... ARGS>
-	RETURN_TYPE ReadRequiredSerializable(ARGS &&...args) {
+	RETURN_TYPE ReadRequiredSerializable(ARGS &&... args) {
 		if (field_count >= max_field_count) {
 			// field is not there, throw an exception
 			throw SerializationException("Attempting to read mandatory field, but field is missing");
@@ -262,7 +334,7 @@ public:
 	}
 
 	template <class T, class RETURN_TYPE = unique_ptr<T>, typename... ARGS>
-	vector<RETURN_TYPE> ReadRequiredSerializableList(ARGS &&...args) {
+	vector<RETURN_TYPE> ReadRequiredSerializableList(ARGS &&... args) {
 		if (field_count >= max_field_count) {
 			// field is not there, throw an exception
 			throw SerializationException("Attempting to read mandatory field, but field is missing");

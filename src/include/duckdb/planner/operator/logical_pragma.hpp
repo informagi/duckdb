@@ -17,8 +17,12 @@ namespace duckdb {
 //! LogicalSimple represents a simple logical operator that only passes on the parse info
 class LogicalPragma : public LogicalOperator {
 public:
+	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_PRAGMA;
+
+public:
 	LogicalPragma(PragmaFunction function_p, PragmaInfo info_p)
-	    : LogicalOperator(LogicalOperatorType::LOGICAL_PRAGMA), function(move(function_p)), info(move(info_p)) {
+	    : LogicalOperator(LogicalOperatorType::LOGICAL_PRAGMA), function(std::move(function_p)),
+	      info(std::move(info_p)) {
 	}
 
 	//! The pragma function to call
@@ -29,6 +33,7 @@ public:
 public:
 	void Serialize(FieldWriter &writer) const override;
 	static unique_ptr<LogicalOperator> Deserialize(LogicalDeserializationState &state, FieldReader &reader);
+	idx_t EstimateCardinality(ClientContext &context) override;
 
 protected:
 	void ResolveTypes() override {
