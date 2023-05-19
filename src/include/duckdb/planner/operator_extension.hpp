@@ -16,12 +16,15 @@ namespace duckdb {
 
 //! The OperatorExtensionInfo holds static information relevant to the operator extension
 struct OperatorExtensionInfo {
-	DUCKDB_API virtual ~OperatorExtensionInfo() {
+	virtual ~OperatorExtensionInfo() {
 	}
 };
 
 typedef BoundStatement (*bind_function_t)(ClientContext &context, Binder &binder, OperatorExtensionInfo *info,
                                           SQLStatement &statement);
+
+// forward declaration to avoid circular reference
+struct LogicalExtensionOperator;
 
 class OperatorExtension {
 public:
@@ -30,7 +33,11 @@ public:
 	//! Additional info passed to the CreatePlan & Bind functions
 	shared_ptr<OperatorExtensionInfo> operator_info;
 
-	DUCKDB_API virtual ~OperatorExtension() {
+	virtual std::string GetName() = 0;
+	virtual unique_ptr<LogicalExtensionOperator> Deserialize(LogicalDeserializationState &state,
+	                                                         FieldReader &reader) = 0;
+
+	virtual ~OperatorExtension() {
 	}
 };
 
